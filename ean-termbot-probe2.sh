@@ -1,0 +1,11 @@
+#!/system/bin/sh
+echo "==BOTS_JSON"
+cat /sdcard/EanHost/termux/bots/bots.json 2>/dev/null || echo "NO_BOTS_JSON"
+echo "==BOTS_STATUS"
+cat /sdcard/EanHost/termux/bots/bots.status 2>/dev/null || echo "NO_STATUS"
+echo "==RUNNER_PIDS"
+pgrep -a -f "runner.py" 2>/dev/null || echo "NO_PID"
+echo "==BOTS_CTL"
+cat /sdcard/EanHost/termux/bots/bots.ctl 2>/dev/null || echo "NO_CTL"
+echo "==LAUNCH_HEAD"
+head -n 40 /sdcard/EanHost/termux/launch.log 2>/dev/null || echo "NO_LAUNCH"

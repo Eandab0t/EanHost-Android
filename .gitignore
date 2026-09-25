@@ -1,0 +1,14 @@
+# runtime state / secrets never to commit
+__pycache__/
+*.pyc
+panel/config.json
+bots.json
+*.log
+*.sock
+*.pid
+*.heart
+.env
+bots.ctl
+bots.stopped
+run-*.pid
+run-*.log

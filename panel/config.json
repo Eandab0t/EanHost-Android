@@ -1,0 +1,1 @@
+{"password_hash": "sha256_hex_of_your_admin_password", "nodes": [["SERIAL1", "Tablet-1"], ["SERIAL2", "Tablet-2"], ["SERIAL3", "Tablet-3"], ["SERIAL4", "Tablet-4"]]}

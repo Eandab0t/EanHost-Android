@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# ean - CLI for the EanHost control plane (direct adb).
+set -u
+DEV="${EAN_DEV:-SERIAL1}"
+ROOT=/sdcard/EanHost
+TASKS=$ROOT/tasks
+OUT=$ROOT/results
+PIDS=$ROOT/sup.pid
+TIMEOUT="${EAN_TIMEOUT:-90}"
+TX=$ROOT/termux
+TIN=$TX/inbox
+TOUT=$TX/outbox
+THEART=$TX/agent.heart
+
+send_() { adb -s $DEV push "$1" "$2"; }
+fetch_() { adb -s $DEV pull "$1" "${2:-$(basename "$1")}"; }
+cmd_() { adb -s $DEV shell "$*"; }
+run_() {
+  if [ "${1:-}" = "-" ]; then bash
+  else bash "$1"; fi
+}
+
+poll() {
+  local name="$1" who="$2" n=0
+  while [ $n -lt $TIMEOUT ]; do
+    if adb -s $DEV shell "test -f $OUT/$name.exit && echo FOUND" 2>/dev/null | grep -q "FOUND"; then
+      echo "--- output ---"
+      adb -s $DEV shell "cat $OUT/$name.out" | tr -d '\r'
+      echo "--- exit ---"
+      adb -s $DEV shell "cat $OUT/$name.exit 2>/dev/null || echo -"
+      return 0
+    fi
+    sleep 1
+    n=$((n + 1))
+  done
+  echo "timeout: no result for $name (is the $who running?)" >&2
+  return 1
+}
+
+wait_() { poll "${1%.sh}" "supervisor" || return 1; }
+
+bot_() {
+  local script="$1" name
+  name=$(basename "${2:-$script}")
+  name="${name%.sh}.sh"
+  adb -s $DEV push "$script" "$TASKS/$name" >/dev/null 2>&1 || { echo "push failed" >&2; return 1; }
+  echo "task queued: $name (supervisor picks it up; results/$name.out)"
+  echo "poll with: ean wait $name"
+}
+
+psup() {
+  local action="${1:-status}" pid alive
+  case "$action" in
+    start)
+      adb -s $DEV shell "sh $ROOT/svc/sstart.sh" >/dev/null 2>&1
+      sleep 2
+      psup status
+      ;;
+    stop)
+      pid=$(adb -s $DEV shell "cat $PIDS" 2>/dev/null | tr -d '\r' | awk '{print $2}')
+      if [ -n "$pid" ] && adb -s $DEV shell "kill $pid" >/dev/null 2>&1; then
+        echo "stopped supervisor $pid"
+      else
+        echo "no supervisor running"
+      fi
+      ;;
+    status)
+      if adb -s $DEV shell "cat $PIDS" 2>/dev/null | grep -q SUP; then
+        pid=$(adb -s $DEV shell "cat $PIDS" | tr -d '\r' | awk '{print $2}')
+        alive=$(adb -s $DEV shell "kill -0 $pid 2>/dev/null && echo yes" | tr -d '\r')
+        echo "supervisor pid=$pid alive=${alive:-no}"
+      else
+        echo "supervisor not running"
+      fi
+      ;;
+    *) echo "usage: ean psup {start|stop|status}" >&2; return 1 ;;
+  esac
+}
+
+agent_alive() {
+  local line h1 now pid ts age
+  line=$(adb -s $DEV shell "cat $THEART 2>/dev/null; date +%s" 2>/dev/null | tr -d '\r')
+  h1=$(echo "$line" | sed -n '1p')
+  now=$(echo "$line" | sed -n '2p')
+  echo "$h1" | grep -qE '^[0-9]+ +[0-9]+ +[0-9]+$' || return 1
+  pid=$(echo "$h1" | awk '{print $2}')
+  ts=$(echo "$h1" | awk '{print $3}')
+  [ -n "$now" ] || return 1
+  age=$((now - ts))
+  [ "$age" -ge 0 ] || return 1
+  [ "$age" -lt 60 ] || return 1
+}
+
+tstart() {
+  local n=0
+  if agent_alive; then
+    echo "termux agent already alive: $(adb -s $DEV shell "cat $THEART" | tr -d '\r')"
+    return 0
+  fi
+  printf '( sh %s/agent.sh > %s/launch.log 2>&1 & )\n' "$TX" "$TX" > /tmp/.eononce
+  adb -s $DEV push /tmp/.eononce "$TX/agentonce.sh" >/dev/null 2>&1
+  rm -f /tmp/.eononce
+  adb -s $DEV shell "settings put global stay_on_while_plugged_in 3" >/dev/null 2>&1
+  adb -s $DEV shell "svc power stayon true" >/dev/null 2>&1
+  adb -s $DEV shell "am start -n com.termux/.app.TermuxActivity" >/dev/null 2>&1
+  sleep 2
+  adb -s $DEV shell "input keyevent 224"
+  sleep 1
+  adb -s $DEV shell "input swipe 320 900 600 400"
+  sleep 1
+  adb -s $DEV shell "input tap 400 400"
+  sleep 1
+  adb -s $DEV shell "input text 'sh%s$TX/agentonce.sh'"
+  adb -s $DEV shell "input keyevent 66"
+  while [ $n -lt 15 ]; do
+    agent_alive && break
+    sleep 1
+    n=$((n + 1))
+  done
+  if agent_alive; then
+    echo "agent started: $(adb -s $DEV shell "cat $THEART" | tr -d '\r')"
+  else
+    echo "WORRY: agent not heartbeating after launch" >&2
+    return 1
+  fi
+}
+
+tbot_() {
+  local name
+  name=$(basename "${2:-$1}")
+  name="${name%.sh}.sh"
+  adb -s $DEV push "$1" "$TIN/$name" >/dev/null 2>&1 || { echo "push failed" >&2; return 1; }
+  echo "termux task queued: $name"
+  echo "poll with: ean twait $name"
+}
+
+tpoll() {
+  local name="$1" n=0
+  while [ $n -lt $TIMEOUT ]; do
+    if adb -s $DEV shell "test -f $TOUT/$name.exit && echo FOUND" 2>/dev/null | grep -q "FOUND"; then
+      echo "--- output ---"
+      adb -s $DEV shell "cat $TOUT/$name.out" | tr -d '\r'
+      echo "--- exit ---"
+      adb -s $DEV shell "cat $TOUT/$name.exit 2>/dev/null || echo -"
+      return 0
+    fi
+    sleep 1
+    n=$((n + 1))
+  done
+  echo "timeout: no result for $name (is the termux agent running? try: ean tstatus)" >&2
+  return 1
+}
+
+twait_() { tpoll "${1%.sh}" || return 1; }
+
+tstatus() {
+  if agent_alive; then
+    echo "termux agent: ALIVE -- $(adb -s $DEV shell "cat $THEART" | tr -d '\r')"
+  else
+    echo "termux agent: NOT heartbeating (use: ean tstart)"
+  fi
+}
+
+usage() {
+  cat <<EOF
+ean <command> [args]   (device defaults to EAN_DEV=${DEV}; set EAN_DEV=<serial> to target another)
+
+Direct adb (no queue daemon):
+  send <local> <remote>            push a file from the host to the device
+  fetch <remote> [local]           pull a file from the device (default: basename)
+  cmd <command...>                 run one shell command on the device
+  run <scriptfile | ->             run a bash script on THIS host
+
+Device supervisor (survives host shutdown): bot/wait/psup.
+  bot <script> [name]              drop a task; runs on the DEVICE, detached
+  wait <task>                      poll results/<task>.out + .exit
+  psup {start|stop|status}         manage the device supervisor daemon
+
+Termux agent (Termux-UID executor):
+  tbot <script> [name]             queue a task for the termux agent (inbox/)
+  twait <task>                     poll termux/outbox/<task>.out + .exit
+  tstatus                          is the termux agent heartbeating?
+  tstart                           idempotent launch (wake, focus, inject)
+
+Env: EAN_DEV (serial), EAN_TIMEOUT (seconds). Keepalives: eanwatch.sh (one loop,
+all nodes).
+EOF
+}
+
+case "${1:-}" in
+  send) shift; send_ "$@" ;;
+  fetch) shift; fetch_ "$@" ;;
+  cmd) shift; cmd_ "$@" ;;
+  run) shift; run_ "$@" ;;
+  bot) shift; bot_ "$@" ;;
+  wait) shift; wait_ "$@" ;;
+  psup) shift; psup "$@" ;;
+  tbot) shift; tbot_ "$@" ;;
+  twait) shift; twait_ "$@" ;;
+  tstatus) tstatus ;;
+  tstart) tstart ;;
+  *) usage ;;
+esac

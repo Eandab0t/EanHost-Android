@@ -1,0 +1,1026 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EanHost Control</title>
+<style>
+:root{
+  --bg:#080a0e; --panel:#0d1017; --panel2:#121722; --panel3:#1a2030;
+  --line:#1a2130; --line2:#283246;
+  --text:#e7eaf1; --muted:#96a0b3; --faint:#5d677a;
+  --amber:#f0a03d; --amber-dim:#a9792e; --amber-glow:rgba(240,160,61,.14);
+  --green:#8fc97a; --red:#e5654f; --yellow:#d9c15a;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Courier New",monospace;
+  --sans:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0;animation:none!important;transition:none!important}
+::selection{background:var(--amber-glow)}
+html{scrollbar-color:var(--line2) transparent;scrollbar-width:thin}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--line2)}
+::-webkit-scrollbar-track{background:transparent}
+body{
+  background:var(--bg);
+  color:var(--text);
+  font:13px/1.55 var(--sans);
+  height:100vh;display:flex;flex-direction:column;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:var(--amber);text-decoration:none}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+
+button{background:var(--panel2);color:var(--text);border:1px solid var(--line2);border-radius:4px;padding:6px 13px;font:600 11px/1.4 var(--sans);letter-spacing:.6px;text-transform:uppercase;cursor:pointer}
+button:hover{border-color:var(--amber-dim);color:var(--amber)}
+button:active{transform:translateY(1px)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+button.primary{background:var(--amber);border-color:var(--amber);color:#17120a}
+button.primary:hover{background:#f5b45c;border-color:#f5b45c;color:#17120a}
+button.danger{background:transparent;border-color:var(--line2);color:var(--red)}
+button.danger:hover{background:var(--red);border-color:var(--red);color:#160a06}
+button.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+button.ghost:hover{background:var(--panel2);color:var(--text);border-color:var(--line2)}
+input,textarea,select{background:#0a0d13;color:var(--text);border:1px solid var(--line2);border-radius:4px;padding:7px 10px;font:13px/1.5 var(--mono);outline:none}
+input:hover,textarea:hover,select:hover{border-color:#3a4660}
+input:focus,textarea:focus,select:focus{border-color:var(--amber-dim);box-shadow:0 0 0 2px var(--amber-glow)}
+input[type=file]{display:none}
+::placeholder{color:var(--faint)}
+.mono{font-family:var(--mono)}
+
+/* ============ icons ============ */
+svg.i{width:15px;height:15px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:-3px}
+
+/* ============ login ============ */
+#login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;z-index:10;background:var(--bg)}
+#login .box{background:var(--panel);border:1px solid var(--line2);padding:34px 32px 26px;width:380px;max-width:calc(100vw - 32px)}
+#login h1{font:700 22px/1.1 var(--sans);letter-spacing:1px;text-transform:uppercase}
+#login h1 span{color:var(--amber)}
+#login .sub{color:var(--faint);font-size:10px;letter-spacing:2px;text-transform:uppercase;margin:8px 0 24px}
+#login form{display:flex;flex-direction:column;gap:11px}
+#login label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
+#login input{padding:10px 11px}
+#login button{padding:10px}
+#login .err{color:var(--red);font-size:12px;padding:8px 10px;background:rgba(229,101,79,.08);border-left:2px solid var(--red)}
+#login .foot{margin-top:18px;color:var(--faint);font-size:9px;letter-spacing:1.2px;text-transform:uppercase;display:flex;justify-content:space-between}
+#login .foot b{color:var(--amber);font-weight:600}
+
+/* ============ app shell ============ */
+#app{display:flex;flex:1;overflow:hidden}
+#sidebar{width:220px;background:var(--panel);border-right:1px solid var(--line2);display:flex;flex-direction:column;flex-shrink:0}
+#sidebar .brand{padding:16px 16px 13px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+#sidebar .brand .mark{width:26px;height:26px;flex-shrink:0;background:var(--amber);color:#17120a;display:flex;align-items:center;justify-content:center;font:700 12px/1 var(--mono);border-radius:4px}
+#sidebar .brand .t{font:700 14px/1 var(--sans);letter-spacing:1.2px;text-transform:uppercase}
+#sidebar .brand .t span{color:var(--amber)}
+#sidebar .brand .s{font-size:9px;color:var(--faint);letter-spacing:1.6px;text-transform:uppercase;margin-top:4px}
+#sidebar nav{flex:1;padding:8px;overflow:auto;display:flex;flex-direction:column;gap:2px}
+#sidebar nav .head{font-size:9px;text-transform:uppercase;color:var(--faint);padding:12px 8px 6px;letter-spacing:1.8px;font-weight:600}
+#sidebar nav button{position:relative;display:flex;align-items:center;gap:9px;text-align:left;background:transparent;border:none;border-left:2px solid transparent;border-radius:0;padding:9px 11px;font:500 12px/1.4 var(--sans);letter-spacing:.1px;color:var(--muted);text-transform:none}
+#sidebar nav button:hover{background:var(--panel2);color:var(--text);border-left-color:var(--line2)}
+#sidebar nav button.active{background:var(--panel2);color:var(--amber);border-left-color:var(--amber)}
+#sidebar nav button svg.i{opacity:.75}
+#sidebar nav button .dot{margin-left:auto}
+#sidebar footer{border-top:1px solid var(--line);padding:10px 12px;display:flex;flex-direction:column;gap:9px}
+#sidebar footer button{width:100%}
+#statusbar{font-size:9px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;display:flex;align-items:center;gap:8px}
+#statusbar .dot{width:6px;height:6px}
+
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+#topbar{background:var(--panel);border-bottom:1px solid var(--line2);padding:0 20px;height:50px;display:flex;align-items:center;gap:13px;flex-shrink:0}
+#menubtn{display:none;padding:7px 9px}
+#topbar h2{font:700 13px/1 var(--sans);letter-spacing:1.1px;text-transform:uppercase;white-space:nowrap}
+#topbar .crumb{color:var(--faint);font-size:12px;display:flex;align-items:center;gap:8px;min-width:0}
+#content{flex:1;overflow:auto;padding:20px;scrollbar-gutter:stable}
+
+/* ============ cards / dashboard ============ */
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(320px,100%),1fr));gap:14px;max-width:1160px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:16px;position:relative}
+.card h3{font:700 12px/1 var(--sans);letter-spacing:.9px;text-transform:uppercase;margin-bottom:14px;display:flex;align-items:center;gap:9px}
+.card h3 .badge{margin-left:auto}
+.dot{display:inline-block;width:8px;height:8px;flex-shrink:0;border-radius:50%}
+.dot.ok{background:var(--green)}
+.dot.bad{background:var(--red)}
+.dot.warn{background:var(--yellow)}
+.card .stat{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--line);font-size:12px;gap:12px}
+.card .stat:last-of-type{border-bottom:none}
+.card .stat .k{color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-size:9.5px;font-weight:600}
+.card .stat .v{font-family:var(--mono);font-size:12px;color:var(--text);text-align:right;white-space:nowrap}
+.card .actions-row{margin-top:13px;display:flex;gap:8px}
+.good{color:var(--green)}.bad{color:var(--red)}.warn{color:var(--yellow)}
+
+.meter{height:5px;background:#0a0d13;border:1px solid var(--line);border-radius:3px;margin:8px 0 3px;overflow:hidden}
+.meter i{display:block;height:100%;background:linear-gradient(90deg,var(--amber-dim),var(--amber))}
+.meter.low i{background:linear-gradient(90deg,#8f3b2c,var(--red))}
+.meter-lab{font-size:9px;color:var(--faint);letter-spacing:1px;text-transform:uppercase;text-align:right;font-family:var(--mono)}
+.meter-block{margin:9px 0 2px}
+.meter-block .k{color:var(--muted);text-transform:uppercase;letter-spacing:.6px;font-size:9.5px;font-weight:600;display:flex;justify-content:space-between}
+.meter-block .k .v{font-family:var(--mono);text-transform:none;letter-spacing:0;color:var(--text);font-size:11px}
+
+/* ============ pills / badges ============ */
+.badge{font-size:9px;padding:2px 8px;font-weight:700;letter-spacing:1px;text-transform:uppercase;border:1px solid;border-radius:3px;font-family:var(--sans)}
+.badge.ok{color:var(--green);border-color:rgba(143,201,122,.4);background:rgba(143,201,122,.08)}
+.badge.bad{color:var(--red);border-color:rgba(229,101,79,.45);background:rgba(229,101,79,.08)}
+.badge.warn{color:var(--yellow);border-color:rgba(217,193,90,.4);background:rgba(217,193,90,.08)}
+.badge.dim{color:var(--muted);border-color:var(--line2);background:var(--panel2)}
+
+/* ============ tabs / toolbar ============ */
+.tabs{display:flex;gap:0;border-bottom:1px solid var(--line2);margin-bottom:15px;flex-wrap:wrap;max-width:1160px}
+.tabs button{display:flex;align-items:center;gap:7px;background:transparent;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;color:var(--muted);padding:10px 15px;letter-spacing:.5px;font-size:12px;text-transform:none;font-weight:600;border-radius:0}
+.tabs button.active{color:var(--amber);border-bottom-color:var(--amber)}
+.tabs button:not(.active):hover{color:var(--text)}
+.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;max-width:1160px}
+.toolbar .crumb{font-size:12px;color:var(--muted);margin-right:auto;display:flex;align-items:center;gap:2px;min-width:0;flex-wrap:wrap}
+.toolbar .crumb button{background:transparent;border:none;color:var(--amber);font:500 12px/1.5 var(--mono);text-transform:none;letter-spacing:0;padding:3px 5px;border-radius:3px}
+.toolbar .crumb button:hover{background:var(--panel2);color:var(--amber)}
+.toolbar .crumb .sep{color:var(--faint);font-family:var(--mono)}
+.toolbar .crumb .leaf{color:var(--text);font:500 12px/1.5 var(--mono);padding:3px 5px}
+
+/* ============ files table ============ */
+.tablewrap{max-width:1160px;overflow-x:auto;border:1px solid var(--line);border-radius:5px;background:var(--panel)}
+table.files{width:100%;border-collapse:collapse;font-size:12.5px;min-width:560px}
+table.files th{text-align:left;color:var(--faint);font-weight:600;padding:9px 12px;border-bottom:1px solid var(--line2);font-size:9.5px;text-transform:uppercase;letter-spacing:1.2px;font-family:var(--sans)}
+table.files td{padding:7px 12px;border-bottom:1px solid var(--line);color:var(--text)}
+table.files tbody tr:last-child td{border-bottom:none}
+table.files tr:hover td{background:var(--panel2)}
+table.files .fname{cursor:pointer;display:flex;align-items:center;gap:9px;font-weight:500;font-family:var(--mono);font-size:12.5px}
+table.files .fname:hover{color:var(--amber)}
+table.files .icon{width:18px;display:flex;justify-content:center;flex-shrink:0;color:var(--muted)}
+table.files tr.dir .icon{color:var(--amber)}
+table.files td.num{font-family:var(--mono);color:var(--muted);font-size:11.5px;white-space:nowrap}
+table.files tr td.actions{text-align:right;white-space:nowrap;padding-right:8px}
+td.actions button{padding:3px 8px;font-size:9px;margin-left:4px;letter-spacing:.4px}
+
+/* ============ empty / loading / error ============ */
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:38px 20px;text-align:center;color:var(--muted);gap:4px}
+.empty svg.i{width:26px;height:26px;color:var(--line2);margin-bottom:8px;stroke-width:1.4}
+.empty .big{font-size:12px;color:var(--text);letter-spacing:1px;text-transform:uppercase;font-weight:600}
+.empty .hint{font-size:11px;color:var(--faint)}
+.loading-row{padding:16px;color:var(--muted);font-size:11px;letter-spacing:1.4px;text-transform:uppercase;display:flex;align-items:center;gap:10px}
+.loading-row::before{content:"";width:11px;height:11px;border:2px solid var(--line2);border-top-color:var(--amber);border-radius:50%;flex-shrink:0}
+.node-error{background:rgba(229,101,79,.06);border:1px solid rgba(229,101,79,.3);border-left:3px solid var(--red);padding:11px 14px;color:var(--red);font-size:12px;max-width:1160px;border-radius:0 4px 4px 0}
+.node-error code{font-size:10px;background:rgba(229,101,79,.1);padding:2px 6px;border-radius:3px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;margin-right:6px}
+
+/* ============ console / logs ============ */
+pre.console,pre.log{padding:13px 15px;font:12px/1.6 var(--mono);overflow:auto;white-space:pre-wrap;word-break:break-word;color:#dbe1d6;background:#0a0d13;border:1px solid var(--line);border-radius:5px;max-width:1160px}
+pre.console{max-height:60vh}
+pre.log{height:420px}
+.cmdbar{display:flex;gap:8px;margin-bottom:10px;align-items:center;max-width:1160px;flex-wrap:wrap}
+.cmdbar input{flex:1;min-width:180px;caret-color:var(--amber)}
+.cmdbar .conn{display:flex;align-items:center;gap:7px;font-size:10px;letter-spacing:1.2px;text-transform:uppercase;color:var(--faint);margin-left:auto}
+.exiline{color:var(--green);font-weight:600}
+.cmdline{color:var(--amber);font-weight:600}
+.errline{color:var(--red)}
+
+/* ============ bot page ============ */
+.bothead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px;max-width:1160px}
+.bothead b{font:700 13px/1 var(--mono)}
+.bothead .badge{margin-left:auto}
+.botmeta{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;max-width:1160px}
+.botmeta .kv{font:500 11px/1 var(--mono);color:var(--muted);border:1px solid var(--line);background:var(--panel);border-radius:3px;padding:4px 9px}
+.botmeta .kv b{color:var(--text);font-weight:600}
+.botacts{display:flex;gap:8px;align-items:center;margin-bottom:16px;max-width:1160px}
+.botacts .sp{margin-right:auto}
+
+/* ============ editor modal ============ */
+#editor{position:fixed;inset:0;background:rgba(6,8,12,.94);display:none;align-items:center;justify-content:center;z-index:50;padding:18px}
+#editor .card{width:min(880px,96vw);max-height:90vh;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line2);border-radius:5px}
+#editor .head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:13px 15px 9px}
+#editor .head b{font-size:12px;font-weight:600;color:var(--amber);font-family:var(--mono);word-break:break-all}
+#editor .head button{padding:5px 10px}
+#editor textarea{width:100%;flex:1;min-height:380px;font:12px/1.6 var(--mono);padding:13px 15px;resize:vertical;color:#dbe1d6;background:#0a0d13;border:none;border-top:1px solid var(--line);border-bottom:1px solid var(--line);border-radius:0}
+#editor .foot{display:flex;gap:8px;margin:11px 15px 13px;justify-content:flex-end}
+#editor .hint{margin-right:auto;font-size:10px;color:var(--faint);letter-spacing:.6px}
+
+/* ============ toast ============ */
+.toast{position:fixed;bottom:22px;right:22px;background:var(--panel3);border:1px solid var(--line2);border-left:3px solid var(--amber);padding:11px 16px;font-size:12px;display:none;z-index:99;max-width:340px;border-radius:4px}
+.toast.show{display:block}
+.botsstat .v{display:flex;flex-direction:column;gap:6px;align-items:flex-end;white-space:normal}
+.botsrow{display:flex;align-items:center;gap:7px;justify-content:flex-end}
+.botsrow .name{background:none;border:none;color:var(--text);font:700 11px/1 var(--mono);text-transform:none;letter-spacing:0;cursor:pointer;padding:0}
+.botsrow .name:hover{color:var(--amber)}
+.botsrow .st{font:600 10px/1 var(--mono)}
+.botsrow .btn{font:600 9px/1 var(--sans);letter-spacing:.4px;text-transform:uppercase;padding:3px 7px;border:1px solid var(--line2);border-radius:3px;background:var(--panel2);color:var(--muted);cursor:pointer}
+.botsrow .btn:hover{color:var(--amber);border-color:var(--amber-dim)}
+.botsrow .btn.stp{color:var(--red);border-color:rgba(229,101,79,.45)}
+.botsrow .btn.stp:hover{background:var(--red);color:#160a06}
+
+/* ============ tasks ============ */
+.task-form{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:15px;max-width:1160px;background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:18px}
+.task-form label{display:flex;flex-direction:column;gap:6px}
+.task-form .lab{color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:1.2px;font-size:9.5px}
+.task-form textarea{grid-column:1/-1;min-height:170px;line-height:1.55}
+.task-form .submit{grid-column:1/-1;justify-self:start;margin-top:2px}
+.h-sec{font:700 12px/1 var(--sans);letter-spacing:1px;text-transform:uppercase;color:var(--text);margin:0 0 13px;display:flex;align-items:center;gap:10px;max-width:1160px}
+.h-sec::after{content:"";height:1px;background:var(--line2);flex:1}
+.logbtn{border:1px solid var(--line2);background:var(--panel);color:var(--muted);padding:6px 11px;border-radius:0;font-size:11px;cursor:pointer;margin-right:-1px;font-weight:500;letter-spacing:.3px;text-transform:none;font-family:var(--mono)}
+.logbtn:first-of-type{border-radius:4px 0 0 4px}
+.logbtn:last-of-type{border-radius:0 4px 4px 0;margin-right:0}
+.logbtn:hover{background:var(--panel2);color:var(--text);position:relative;z-index:1}
+.logbtn.active{color:var(--amber);background:var(--panel2);border-color:var(--amber-dim);z-index:2;position:relative}
+
+/* ============ responsive ============ */
+@media (max-width:1024px){
+  #sidebar{width:56px}
+  #sidebar .brand .twrap,#sidebar nav .head,#sidebar nav button .label,#statusbar .stext{display:none}
+  #sidebar .brand{justify-content:center;padding:14px 0}
+  #sidebar nav button{justify-content:center;padding:10px 0}
+  #sidebar nav button .dot{margin-left:2px;width:6px;height:6px}
+  #sidebar footer{padding:9px 7px}
+}
+@media (max-width:760px){
+  #menubtn{display:inline-block}
+  #sidebar{position:fixed;z-index:40;top:0;bottom:0;left:0;margin-left:-220px;width:220px}
+  #sidebar.open{margin-left:0}
+  #sidebar .brand .twrap{display:block}
+  #sidebar nav .head{display:block}
+  #sidebar nav button{justify-content:flex-start;padding:9px 11px}
+  #sidebar nav button .dot{position:static;margin:0 0 0 auto;width:7px;height:7px}
+  #statusbar .stext{display:inline}
+  #content{padding:14px}
+  #topbar{padding:0 14px}
+  .task-form{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+
+<div id="login">
+  <div class="box">
+    <h1>Ean<span>Host</span></h1>
+    <p class="sub">Node Control</p>
+    <form id="loginform">
+      <label for="pw">Admin password</label>
+      <input type="password" id="pw" placeholder="••••••••••" autocomplete="current-password">
+      <button type="submit" class="primary">Sign in</button>
+      <div class="err" id="logn" style="display:none"></div>
+    </form>
+    <div class="foot"><span>LAN ONLY</span><b>local trust</b></div>
+  </div>
+</div>
+
+<div id="app" style="display:none">
+  <div id="sidebar">
+    <div class="brand">
+      <div class="mark">&gt;_</div>
+      <div class="twrap">
+        <div class="t">Ean<span>Host</span></div>
+        <div class="s">Node control</div>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <footer>
+      <div id="statusbar"><span class="dot ok"></span><span class="stext" id="statusline">connected</span></div>
+      <button id="logout">Log out</button>
+    </footer>
+  </div>
+  <div id="main">
+    <div id="topbar">
+      <button id="menubtn" class="ghost" aria-label="Toggle menu"><svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+      <h2 id="title">Dashboard</h2>
+      <span class="crumb" id="crumb"></span>
+    </div>
+    <div id="content"></div>
+  </div>
+</div>
+
+<div id="editor">
+  <div class="card">
+    <div class="head"><b id="edpath"></b><span class="hint">ctrl+S to save</span><button id="edclose" aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <textarea id="edbody" spellcheck="false" placeholder="Could not load file"></textarea>
+    <div class="foot">
+      <button id="edreload">Reload</button>
+      <button id="edsave" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
+<div id="ezbox" style="display:none;position:fixed;inset:0;z-index:20;background:rgba(5,7,10,.72);align-items:center;justify-content:center">
+  <div style="background:var(--panel);border:1px solid var(--line2);border-radius:6px;width:520px;max-width:calc(100vw - 32px);padding:22px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <b style="letter-spacing:.5px;text-transform:uppercase;font-size:12px">Install bot (zip)</b>
+      <button class="ghost" id="ezcancel" aria-label="Close"><svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div style="display:grid;gap:10px">
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="ezpick" style="white-space:nowrap">Choose .zip</button>
+        <span class="mono" id="ezfname" style="color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">No file chosen</span>
+        <input type="file" id="ezfile" accept=".zip,application/zip">
+      </div>
+      <input id="ezname" placeholder="bot-name (starts it with python/node from bot.py / main.py / package.json)">
+      <input id="eztok" placeholder="Discord token (optional - only if the zip has no .env)" type="password">
+      <div style="color:var(--faint);font-size:11px;line-height:1.6">If the zip ships its own <span class="mono">.env</span> it is kept as-is; otherwise one is created from the token above (or a <span class="mono">.env</span> stub to fill in). <span class="mono">requirements.txt</span> / <span class="mono">package.json</span> deps are installed on the device and the result is reported below. <b style="color:var(--muted)">Using an existing bot name = update</b> (code replaced, token kept, bot auto-restarted).</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="ezopen" style="display:none">Open bot folder</button>
+        <button id="ezdo" class="primary">Install</button>
+      </div>
+      <pre id="ezresult" class="mono" style="background:#0a0d13;border:1px solid var(--line2);border-radius:4px;padding:10px;max-height:260px;overflow:auto;font-size:12px;white-space:pre-wrap;color:var(--green)"></pre>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const SERIALS=[["SERIAL1","Tablet-1"],["SERIAL2","Tablet-2"]];
+const devName=s=>SERIALS.find(x=>x[0]===s)?.[1]||s;
+let state=null, selSerial=null, selGuide=false, curPath={}, statusTimer=0, curBot=null;
+const $=s=>document.querySelector(s);
+
+const ICONS={
+  dash:'<svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>',
+  node:'<svg class="i" viewBox="0 0 24 24"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M10 19h4"/></svg>',
+  files:'<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  folder:'<svg class="i" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  file:'<svg class="i" viewBox="0 0 24 24"><path d="M6 2h8l4 4v16H6z"/><path d="M14 2v4h4"/></svg>',
+  up:'<svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  console:'<svg class="i" viewBox="0 0 24 24"><path d="M4 5h16v14H4z"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>',
+  tasks:'<svg class="i" viewBox="0 0 24 24"><path d="M9 6h11M9 12h11M9 18h11"/><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"/></svg>',
+  logs:'<svg class="i" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+  bolt:'<svg class="i" viewBox="0 0 24 24"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>'
+};
+
+function esc(s){return String(s??"").replace(/[&<>\"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]))}
+
+/* ---------- auth ---------- */
+async function login(e){
+  e.preventDefault();
+  const pw=$("#pw").value.trim();
+  if(!pw) return;
+  const r=await fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({password:pw})});
+  if(r.ok){const j=await r.json();localStorage.setItem("tok",j.token);$("#login").style.display="none";$("#app").style.display="flex";init();}
+  else {$("#logn").textContent="WRONG PASSWORD";$("#logn").style.display="";}
+}
+$("#loginform").addEventListener("submit",login);
+$("#logout").addEventListener("click",async()=>{await fetch("/api/logout",{method:"POST"});location.reload();});
+$("#menubtn").addEventListener("click",()=>$("#sidebar").classList.toggle("open"));
+document.addEventListener("click",e=>{
+  const sb=$("#sidebar");
+  if(sb.classList.contains("open")&&!sb.contains(e.target)&&e.target.closest("#menubtn")===null)sb.classList.remove("open");
+});
+
+/* ---------- status polling (efficient) ---------- */
+async function refreshStatus(){
+  try{
+    const r=await fetch("/api/status",{cache:"no-store"});
+    if(r.status===401){location.reload();return;}
+    state=await r.json();
+    const sig=JSON.stringify(state);
+    if(sig!==refreshStatus._sig){
+      refreshStatus._sig=sig;
+      drawNav();
+      if($("#content").dataset.view==="dashboard") drawDashboard();
+      if(selSerial&&$("#content").dataset.view==="node") drawNodeSidebar();
+    }
+    if($("#content").dataset.view==="bot") drawBotLive();
+    const el=$("#statusline"); if(el){const up=state.nodes.filter(n=>n.present).length;el.textContent=`${up}/${state.nodes.length} nodes online`;}
+  }catch(err){}
+}
+function navBtnHtml(view,serial,label,ok){
+  const dot=ok===undefined?"":`<span class="dot ${ok?"ok":"bad"}"></span>`;
+  const icon=view==="dashboard"?ICONS.dash:ICONS.node;
+  return `<button data-view="${view}"${serial?` data-serial="${serial}"`:""} class="navbtn">${icon}<span class="label">${esc(label)}</span>${dot}</button>`;
+}
+function drawNav(){
+  const nav=$("#nav");
+  nav.innerHTML=`<div class="head">Overview</div>${navBtnHtml("dashboard",null,"Dashboard")}${navBtnHtml("guide",null,"Bots guide")}<div class="head">Nodes</div>`;
+  state.nodes.forEach(n=>{
+    const ok=n.present&&((n.agent_alive||false)||(n.supervisor?.alive||false));
+    nav.insertAdjacentHTML("beforeend",navBtnHtml("node",n.serial,n.name,ok));
+  });
+  nav.querySelectorAll(".navbtn").forEach(b=>{
+    b.addEventListener("click",()=>{
+      selSerial=b.dataset.serial||null;
+      $("#sidebar").classList.remove("open");
+      if(b.dataset.view==="dashboard"){showDashboard();}
+      else if(b.dataset.view==="guide"){showGuide();}
+      else{showNode(b.dataset.serial);}
+    });
+  });
+  navActive();
+}
+function navActive(){
+  document.querySelectorAll(".navbtn").forEach(x=>x.classList.toggle("active",
+    x.dataset.view==="guide"?selGuide:(x.dataset.view==="dashboard"?!selGuide&&!selSerial:x.dataset.serial===selSerial)));
+}
+
+/* ---------- dashboard ---------- */
+function showDashboard(){
+  selGuide=false; curBot=null;
+  $("#title").textContent="Dashboard";
+  $("#crumb").textContent="";
+  $("#content").dataset.view="dashboard";
+  navActive();
+  drawDashboard();
+}
+function drawDashboard(){
+  if(!state)return;
+  const c=$("#content");c.classList.add("cards");c.innerHTML="";
+  state.nodes.forEach(n=>{
+    const batt=n.battery?.level??null;
+    const sup=n.supervisor?n.supervisor.alive:false;
+    const agt=n.agent_alive;
+    const h=n.agent?`iter ${n.agent.iter} · ${n.agent.age}s`:"-";
+    const battPill=batt==null?"":`<span class="badge ${batt<=20?"bad":batt<=40?"warn":"dim"}">${batt}%${n.battery.charging?" ⚡":""}</span>`;
+    c.insertAdjacentHTML("beforeend",`
+      <div class="card">
+        <h3><span class="dot ${n.present?"ok":"bad"}"></span> ${esc(n.name)} ${battPill}</h3>
+        <div class="stat"><span class="k">Device</span><span class="v ${n.present?"good":"bad"}">${n.present?"CONNECTED":"OFFLINE"}</span></div>
+        <div class="stat"><span class="k">Serial</span><span class="v">${esc(n.serial)}</span></div>
+        <div class="stat"><span class="k">Supervisor</span><span class="v ${n.supervisor?(sup?"good":"bad"):""}">${n.supervisor?`pid ${n.supervisor.pid}`:"not running"}</span></div>
+        <div class="stat"><span class="k">Termux agent</span><span class="v ${agt?"good":"warn"}">${agt?"ALIVE":"STALE"}</span></div>
+        ${n.bots?`<div class="stat botsstat"><span class="k">Bots</span><span class="v">${Object.entries(n.bots).map(([k,v])=>botChip(n.serial,k,v)).join("")}</span></div>`:""}
+        ${batt!=null?`<div class="meter-block"><span class="k"><span>Battery</span><span class="v">${batt}%${n.battery.charging?" ⚡":""}</span></span><div class="meter ${batt<=20?"low":""}"><i style="width:${Math.min(batt,100)}%"></i></div></div>`:""}
+        <div class="actions-row">
+          <button class="primary" onclick="showNode('${n.serial}')">Open node</button>
+          <button onclick="quickFiles('${n.serial}')">Files</button>
+        </div>
+      </div>`);
+  });
+  c.querySelectorAll(".botsrow .btn[data-bot]").forEach(b=>{
+    const br=b.closest(".botsrow");
+    b.addEventListener("click",ev=>{ev.stopPropagation();botAct(br.dataset.serial,b.dataset.bot,b.dataset.act);});
+  });
+  c.querySelectorAll(".botsrow .name").forEach(b=>{
+    const br=b.closest(".botsrow");
+    b.addEventListener("click",()=>showBotPage(br.dataset.serial,b.dataset.bot));
+  });
+}
+function quickFiles(serial){showNode(serial);setTimeout(()=>{const f=$("#content").querySelector('[data-tab="files"]');if(f)f.click();},0);}
+
+/* ---------- node page tabs ---------- */
+function showNode(serial){
+  selSerial=serial; curBot=null;
+  selGuide=false;
+  $("#title").textContent=devName(serial);
+  $("#content").dataset.view="node";
+  $("#content").classList.remove("cards");
+  const n=state?.nodes.find(x=>x.serial===serial);
+  const ok=n?n.present&&(n.agent_alive||n.supervisor?.alive):false;
+  $("#crumb").innerHTML=`<span class="dot ${ok?"ok":"bad"}"></span><span>${ok?"NODE ONLINE":"NODE OFFLINE"}</span>`;
+  navActive();
+  $("#content").innerHTML=`
+    <div class="tabs">
+      <button data-tab="files" class="tab active">${ICONS.files} Files</button>
+      <button data-tab="console" class="tab">${ICONS.console} Console</button>
+      <button data-tab="tasks" class="tab">${ICONS.tasks} Tasks</button>
+      <button data-tab="logs" class="tab">${ICONS.logs} Logs</button>
+    </div><div id="tabbody"></div>`;
+  $("#content").querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
+    $("#content").querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active");
+    const tab=b.dataset.tab;
+    if(tab==="files")showFiles();
+    else if(tab==="console")showConsole();
+    else if(tab==="tasks")showTasks();
+    else showLogs();
+  }));
+  showFiles();
+}
+function drawNodeSidebar(){
+  if(!state)return;
+  const b=$("#nav").querySelector(`[data-serial="${selSerial}"]`);
+  const n=state.nodes.find(x=>x.serial===selSerial);
+  if(!b||!n)return;
+  const ok=n.present&&(n.agent_alive||n.supervisor?.alive);
+  const dot=b.querySelector(".dot"); if(dot){dot.className="dot "+(ok?"ok":"bad");}
+}
+
+/* ---------- files ---------- */
+const ROOT="/sdcard";
+function crumbHtml(p){
+  const parts=p.replace(/\/+$/,"").split("/").filter(Boolean);
+  let html=`<button data-cpath="/${parts[0]||""}">/${parts[0]||""}</button>`;
+  let acc="/"+parts[0];
+  for(let i=1;i<parts.length;i++){
+    acc+="/"+parts[i];
+    html+=`<span class="sep">/</span><button data-cpath="${esc(acc)}">${esc(parts[i])}</button>`;
+  }
+  return html;
+}
+async function showFiles(){
+  const path=curPath[selSerial]||ROOT;
+  const tb=$("#tabbody");
+  tb.innerHTML=`<div class="toolbar"><span class="crumb" id="fcrumb">${esc(path)}</span>
+    <button id="btndir">New folder</button><button id="btnupload">Upload</button><button class="primary" id="btnez">Install bot</button>
+    <input type="file" id="filein" multiple></div>
+    <div class="toolbar" style="margin-bottom:12px"><span class="crumb"><span style="user-select:none">Jump:</span>
+      <button data-jump="/sdcard/EanHost">root</button>
+      <button data-jump="/sdcard/EanHost/bots">bots</button>
+      <button data-jump="/sdcard/EanHost/tasks">tasks</button>
+      <button data-jump="/sdcard/EanHost/termux/bots">termux/bots</button>
+      <button data-jump="/sdcard/EanHost/files">files</button>
+    </span></div>
+    <div class="tablewrap"><table class="files"><thead><tr><th>Name</th><th>Size</th><th>Modified</th><th></th></tr></thead><tbody id="tbfiles"></tbody></table></div>`;
+  const tbody=$("#tbfiles");
+  tbody.innerHTML=`<tr><td colspan="4"><div class="loading-row">Reading directory…</div></td></tr>`;
+  try{
+    const r=await fetch(`/api/node/${selSerial}/files?path=${encodeURIComponent(path)}`,{cache:"no-store"});
+    if(r.status===401){location.reload();return;}
+    const j=await r.json(); curPath[selSerial]=path;
+    $("#fcrumb").innerHTML=crumbHtml(j.path);
+    $("#fcrumb").querySelectorAll("[data-cpath]").forEach(b=>b.addEventListener("click",()=>showFilesAt(b.dataset.cpath)));
+    tb.querySelectorAll("[data-jump]").forEach(b=>b.addEventListener("click",()=>showFilesAt(b.dataset.jump)));
+    const curDir=j.path.split("/").pop().toLowerCase();
+    const inBotsDir=curDir==="bots";
+    tbody.innerHTML="";
+    if(path!==ROOT){
+      tbody.insertAdjacentHTML("beforeend",`<tr><td><span class="fname" data-up="1"><span class="icon">${ICONS.up}</span> ..</span></td><td></td><td></td><td class="actions"></td></tr>`);
+    }
+    if(!j.entries.length){
+      tbody.insertAdjacentHTML("beforeend",`<tr><td colspan="4"><div class="empty">${ICONS.folder}<div class="big">Empty directory</div><div class="hint">No entries under ${esc(j.path)}</div></div></td></tr>`);
+    }
+    j.entries.forEach(e=>{
+      const icon=e.type==="dir"?ICONS.folder:ICONS.file;
+      tbody.insertAdjacentHTML("beforeend",`<tr class="${e.type==="dir"?"dir":""}">
+        <td><span class="fname" data-type="${e.type}" data-name="${esc(e.name)}"><span class="icon">${icon}</span> ${esc(e.name)}</span></td>
+        <td class="num">${e.type==="file"&&e.size?fmtSize(e.size):""}</td>
+        <td class="num">${esc(e.mtime)}</td>
+        <td class="actions">
+          ${e.type==="file"?`<button data-act="edit" data-name="${esc(e.name)}">Edit</button>`:""}
+          ${e.type==="file"?`<button data-act="bc" data-name="${esc(e.name)}">To all</button>`:""}
+          <button data-act="dl" data-name="${esc(e.name)}">DL</button>
+          <button data-act="rn" data-name="${esc(e.name)}">Ren</button>
+          <button class="danger" data-act="rm" data-name="${esc(e.name)}">Del</button>
+        </td></tr>`);
+    });
+    tbody.querySelectorAll(".fname").forEach(s=>s.addEventListener("click",()=>{
+      if(s.dataset.up){showFilesAt(parentPath(j.path));return;}
+      const name=s.dataset.name, p=join(j.path,name);
+      if(s.dataset.type==="dir")showFilesAt(p);
+      else openEditor(p);
+    }));
+    tbody.querySelectorAll("button[data-act]").forEach(b=>{
+      b.addEventListener("click",()=>{
+        const name=b.dataset.name, p=join(j.path,name), act=b.dataset.act;
+        if(act==="edit")openEditor(p);
+        else if(act==="dl")dlFile(p);
+        else if(act==="rn")renameFile(j.path,name);
+        else if(act==="rm")rmFile(j.path,name);
+        else if(act==="bc")bcastFile(j.path,name);
+      });
+    });
+    tb.querySelector("#btndir").onclick=()=>{const n=prompt("Folder name:"); if(!n)return; mkdir(j.path,n);};
+    tb.querySelector("#btnupload").onclick=()=>$("#filein").click();
+    tb.querySelector("#btnez").onclick=ezOpen;
+    $("#filein").onchange=async ev=>{
+      const files=[...ev.target.files]; if(!files.length)return;
+      let okn=0,errs=[];
+      for(const f of files){
+        const dst=join(j.path,f.name);
+        toast(`Uploading ${f.name}…`);
+        try{
+          const r=await fetch(`/api/node/${selSerial}/upload?path=${encodeURIComponent(dst)}`,{method:"POST",body:f});
+          const jr=await r.json();
+          if(r.ok&&jr.ok)okn++; else errs.push(f.name);
+        }catch(err){errs.push(f.name);}
+      }
+      toast(okn?`Uploaded ${okn}/${files.length} file${okn===1?"":"s"}`:`Upload failed: ${errs.join(", ")}`);
+      ev.target.value="";
+      showFilesAt(j.path);
+    };
+  }catch(err){tbody.innerHTML=`<tr><td colspan="4"><div class="node-error"><code>READ FAILED</code>${esc(String(err))}</div></td></tr>`;}
+}
+function showFilesAt(p){curPath[selSerial]=p;showFiles();}
+function join(a,b){return (a.endsWith("/")?a:a+"/")+b;}
+function parentPath(p){const i=p.lastIndexOf("/");return i<=0?"/sdcard/":p.slice(0,i);}
+
+async function rmFile(dir,name){
+  if(!confirm(`Delete ${name}?`))return;
+  const r=await fetch(`/api/node/${selSerial}/delete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:join(dir,name)})});
+  toast(r.ok?"Deleted":"Delete failed"); showFilesAt(dir);
+}
+async function mkdir(dir,name){
+  const r=await fetch(`/api/node/${selSerial}/mkdir`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:join(dir,name)})});
+  toast(r.ok?"Created":"Create failed"); showFilesAt(dir);
+}
+async function renameFile(dir,name){
+  const n=prompt("New name:",name); if(!n||n===name)return;
+  const r=await fetch(`/api/node/${selSerial}/rename`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:join(dir,name),newname:n})});
+  toast(r.ok?"Renamed":"Rename failed"); showFilesAt(dir);
+}
+function dlFile(p){window.location=`/api/node/${selSerial}/download?path=${encodeURIComponent(p)}`;}
+async function bcastFile(dir,name){
+  if(!confirm(`Copy "${name}" to the same path on all other nodes?`))return;
+  const path=join(dir,name);
+  toast("Broadcasting…");
+  try{
+    const r=await fetch(`/api/node/${selSerial}/broadcast?path=${encodeURIComponent(path)}`,{method:"POST"});
+    const jr=await r.json();
+    const good=jr.results?Object.entries(jr.results).filter(([,ok])=>ok).map(([n])=>n):[];
+    toast(good.length?`Sent to ${good.join(", ")}`:`Broadcast failed: ${jr.error||""}`);
+  }catch(err){toast("Broadcast error");}
+}
+function fmtSize(b){if(b>=1048576)return (b/1048576).toFixed(1)+"M";if(b>=1024)return Math.round(b/1024)+"K";return b+"B";}
+
+/* ---------- bot controls & bot page ---------- */
+function botChip(serial,name,st){
+  const on=st==="UP";
+  const cls=st==="UP"?"good":(st==="STP"?"bad":"warn");
+  let act=on?`<button class="btn" data-bot="${name}" data-act="restart">restart</button><button class="btn stp" data-bot="${name}" data-act="stop">× stop</button>`
+            :`<button class="btn" data-bot="${name}" data-act="start">▶ start</button>`;
+  return `<div class="botsrow" data-serial="${serial}"><button class="name" data-bot="${name}">${esc(name)}</button><span class="st ${cls}">${esc(st)}</span>${act}</div>`;
+}
+async function botAct(serial,name,action){
+  toast(`${action} ${name}…`);
+  let r,j;
+  try{
+    r=await fetch(`/api/node/${serial}/bot`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,action})});
+    j=await r.json();
+  }catch(e){toast("bot action failed");return;}
+  if(!r.ok||!j.ok){toast(j.error||`${action} failed`);return;}
+  toast(`${name}: ${action} sent`);
+  setTimeout(()=>{if(state)refreshStatus();},1500);
+}
+function botStatusOf(serial,name){
+  const n=state?.nodes.find(x=>x.serial===serial);
+  return n?.bots?.[name] || null;
+}
+async function showBotPage(serial,name){
+  selSerial=serial; curBot={serial,name};
+  selGuide=false;
+  $("#title").textContent=name;
+  $("#crumb").innerHTML=`<button style="background:none;border:none;color:var(--faint);cursor:pointer;font:inherit" onclick="showNode('${serial}')">${esc(devName(serial))} →</button>`;
+  $("#content").classList.remove("cards");
+  $("#content").dataset.view="bot";
+  navActive();
+  $("#content").innerHTML=`
+    <div class="bothead"><b>${esc(name)}</b><span class="badge dim" id="bstat">…</span></div>
+    <div class="tabs">
+      <button data-btab="console" class="tab active">${ICONS.console} Console</button>
+      <button data-btab="files" class="tab">${ICONS.files} Files</button>
+      <button data-btab="settings" class="tab">${ICONS.bolt} Settings</button>
+    </div>
+    <div id="tabbody"></div>`;
+  $("#content").querySelectorAll(".tab").forEach(b=>b.addEventListener("click",()=>{
+    $("#content").querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    b.classList.add("active");
+    const t=b.dataset.btab;
+    if(t==="console")showBotConsole(name);
+    else if(t==="files")showBotFiles(serial,name);
+    else showBotSettings(serial,name);
+  }));
+  showBotConsole(name);
+}
+function drawBotLive(){
+  if(!curBot)return;
+  const st=botStatusOf(curBot.serial,curBot.name);
+  const b=$("#bstat");
+  if(b&&st){
+    const cls=st==="UP"?"ok":(st==="STP"?"bad":"warn");
+    b.className="badge "+cls; b.textContent=st;
+  }
+  const s=$("#bsettings");
+  if(s) s.textContent=(st||"…");
+}
+function showBotConsole(name){
+  const tb=$("#tabbody");
+  tb.innerHTML=`<div class="toolbar">
+    <button id="bcauto" class="ghost" style="border:1px solid var(--line2)">Auto: off</button>
+    <button class="primary" id="bcref">Refresh</button>
+    <span class="conn" id="bccon"></span>
+  </div>
+  <pre class="console" id="bcout"><span style="color:var(--faint)">loading…</span></pre>`;
+  let timer=null;
+  const load=async()=>{
+    const con=$("#bccon");
+    if(con)con.textContent="fetching…";
+    try{
+      const r=await fetch(`/api/node/${selSerial}/logs?name=botrun&bot=${encodeURIComponent(name)}`,{cache:"no-store"});
+      if(r.status===401){location.reload();return;}
+      const j=await r.json();
+      const out=$("#bcout");
+      const txt=j.content||"(no log output yet)";
+      const lines=txt.split("\n");
+      out.textContent=lines.length>400?lines.slice(-400).join("\n"):txt;
+      out.scrollTop=out.scrollHeight;
+      if(con)con.textContent=`${lines.length} lines · last ${(new Date()).toLocaleTimeString()}`;
+    }catch(err){const out=$("#bcout");out.innerHTML=`<span class="errline">${esc(String(err))}</span>`;}
+  };
+  const setAuto=v=>{
+    $("#bcauto").textContent=v?"Auto: on · 4s":"Auto: off";
+  };
+  $("#bcref").onclick=load;
+  $("#bcauto").onclick=()=>{
+    if(timer){clearInterval(timer);timer=null;setAuto(false);}
+    else{timer=setInterval(load,4000);setAuto(true);load();}
+  };
+  load();
+}
+function showBotFiles(serial,name){
+  const cfg=botCfg(name);
+  const dir=cfg?.dir||"";
+  const abs=(dir.startsWith("/"));
+  if(!dir){
+    const tb=$("#tabbody");
+    tb.innerHTML=`<div class="tablewrap"><table class="files"><tbody><tr><td><div class="empty">${ICONS.folder}<div class="big">No bot folder configured</div><div class="hint">Edit bots.json to add a dir for this bot.</div></div></td></tr></tbody></table></div>`;
+    return;
+  }
+  if(abs){
+    const tb=$("#tabbody");
+    tb.innerHTML=`<div class="tablewrap"><table class="files"><tbody><tr><td><div class="empty">${ICONS.folder}<div class="big">Project sits in Termux home</div><div class="hint">${esc(dir)} is not readable over adb (different user). Use the Console tab, or manage files from inside Termux on the tablet.</div></div></td></tr></tbody></table></div>`;
+    return;
+  }
+  curPath[serial]="/sdcard/EanHost/termux/bots/"+dir;
+  showFiles();
+}
+function botCfg(name){
+  return (curBot&&curBot.cfg)?curBot.cfg.find(b=>b.name===name):null;
+}
+async function loadBotCfg(serial){
+  try{
+    const r=await fetch(`/api/node/${serial}/download?path=${encodeURIComponent("/sdcard/EanHost/termux/bots/bots.json")}`,{cache:"no-store"});
+    if(!r.ok)return null;
+    const j=await r.json();
+    return j.bots||[];
+  }catch(e){return null;}
+}
+async function showBotSettings(serial,name){
+  const tb=$("#tabbody");
+  const bots=(await loadBotCfg(serial))||[];
+  if(curBot)curBot.cfg=bots;
+  const cfg=bots.find(b=>b.name===name)||null;
+  const st=botStatusOf(serial,name)||"…";
+  const dir=cfg?cfg.dir:"?";
+  const cmd=cfg?cfg.cmd:"?";
+  const abs=dir.startsWith("/");
+  tb.innerHTML=`
+    <div class="botmeta">
+      <span class="kv">status <b id="bsettings">${esc(st)}</b></span>
+      <span class="kv">dir <b>${esc(abs?dir:("/sdcard/EanHost/termux/bots/"+dir))}</b></span>
+      <span class="kv">cmd <b>${esc(cmd)}</b></span>
+    </div>
+    <div class="botacts">
+      <button class="primary" data-ba="restart">Restart</button>
+      <button class="danger" data-ba="stop">× Stop</button>
+      ${st!=="UP"?`<button data-ba="start">▶ Start</button>`:""}
+      <span class="sp"></span>
+      <button data-ba="cfg">Edit bots.json</button>
+      <button data-ba="log">View run log</button>
+    </div>
+    ${abs?`<div class="tablewrap" style="margin-top:10px"><table class="files"><tbody><tr><td><div class="node-error"><code>ENV NOTE</code>Tokens/config for this bot live in its own <span class="mono">.env</span> inside Termux home - not reachable from the panel's file browser.</div></td></tr></tbody></table></div>`:""}
+    <div class="h-sec" style="margin-top:18px">Quick tips</div>
+    <div class="card"><ul style="font-size:12.5px;line-height:1.9;padding-left:20px">
+      <li><b>Console</b> = the live <span class="mono">run-${esc(name)}.log</span> output.</li>
+      <li><b>Stop</b> marks the bot stopped (survives runner restarts); <b>Start</b> unmarks it.</li>
+      <li><b>Prod on another node?</b> Files tab → highlight a file → <b>To all</b> broadcasts it.</li>
+    </ul></div>`;
+  tb.querySelectorAll("[data-ba]").forEach(btn=>{
+    btn.addEventListener("click",()=>{
+      const a=btn.dataset.ba;
+      if(a==="restart"||a==="stop"||a==="start")botAct(serial,name,a);
+      else if(a==="cfg")openEditor("/sdcard/EanHost/termux/bots/bots.json");
+      else if(a==="log")showBotConsole(name);
+    });
+  });
+}
+
+/* ---------- editor ---------- */
+let edPath=null;
+async function openEditor(p){
+  edPath=p;
+  $("#edpath").textContent=p;
+  $("#editor").style.display="flex";
+  await loadEditor();
+}
+async function loadEditor(){
+  const r=await fetch(`/api/node/${selSerial}/download?path=${encodeURIComponent(edPath)}`,{cache:"no-store"});
+  if(!r.ok){$("#edbody").value="// could not load "+edPath;return;}
+  $("#edbody").value=await r.text();
+}
+$("#edclose").onclick=()=>{$("#editor").style.display="none";};
+$("#edreload").onclick=loadEditor;
+$("#edsave").onclick=async()=>{
+  const r=await fetch(`/api/node/${selSerial}/writetext`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:edPath,content:$("#edbody").value})});
+  toast(r.ok?"Saved":"Save failed");
+  if(r.ok)$("#editor").style.display="none";
+  showFiles();
+};
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&$("#editor").style.display==="flex")$("#edclose").click();
+  if((e.ctrlKey||e.metaKey)&&(e.key==="s"||e.key==="S")&&$("#editor").style.display==="flex"){
+    e.preventDefault();
+    $("#edsave").click();
+  }
+});
+
+/* ---------- console (single-shot) ---------- */
+function showConsole(){
+  const tb=$("#tabbody");
+  tb.innerHTML=`<div class="cmdbar"><input id="cmd" class="mono" placeholder="adb shell command, e.g. echo hi && ls /sdcard/EanHost" autocomplete="off">
+    <button class="primary" id="run">Run</button><button id="clear">Clear</button></div>
+    <pre class="console" id="cout"></pre>`;
+  const out=$("#cout"), input=$("#cmd");
+  const run=async()=>{
+    const cmd=input.value.trim(); if(!cmd)return;
+    out.textContent="";
+    out.insertAdjacentHTML("beforeend",`<span class="cmdline">$ ${esc(cmd)}\n</span>`);
+    try{
+      const r=await fetch(`/api/node/${selSerial}/cmd`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cmd})});
+      if(r.status===401){location.reload();return;}
+      const j=await r.json();
+      out.insertAdjacentText("beforeend",(j.output||"")+"\n");
+      out.insertAdjacentHTML("beforeend",`<span class="exiline">[exit ${esc(j.exit)}]</span>\n`);
+    }catch(err){out.insertAdjacentHTML("beforeend",`<span class="errline">${esc(String(err))}\n</span>`);}
+    out.scrollTop=out.scrollHeight;
+  };
+  $("#run").onclick=run;
+  input.addEventListener("keydown",e=>{if(e.key==="Enter")run();});
+  $("#clear").onclick=()=>{out.textContent="";};
+}
+
+/* ---------- tasks ---------- */
+function taskState(done,exit){
+  if(!done)return {cls:"warn",lab:"RUNNING"};
+  const code=parseInt(exit,10);
+  return (exit!==null&&exit!==undefined&&!isNaN(code)&&code===0)?{cls:"ok",lab:"SUCCESS"}:{cls:"bad",lab:"FAILED"};
+}
+async function showTasks(){
+  const tb=$("#tabbody");
+  tb.innerHTML=`
+    <div class="h-sec">Queue a script on this node</div>
+    <div class="task-form">
+      <label><span class="lab">Executor</span>
+        <select id="tmode"><option value="supervisor">Device supervisor (shell uid, tasks/)</option><option value="termux">Termux agent (inbox/)</option></select>
+      </label>
+      <label><span class="lab">Task name</span> <input id="tname" placeholder="leave empty for auto"></label>
+      <textarea id="tscript" placeholder="#!/system/bin/sh&#10;echo hello from device"></textarea>
+      <button class="primary submit" id="trun">Queue task</button>
+    </div>
+    <div id="tres" style="margin-top:14px"></div>`;
+  const res=$("#tres");
+  $("#trun").onclick=async()=>{
+    const mode=$("#tmode").value,name=$("#tname").value.trim(),script=$("#tscript").value;
+    if(!script){toast("Script body is empty");return;}
+    const r=await fetch(`/api/node/${selSerial}/task`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode,name,script})});
+    const j=await r.json();
+    if(!r.ok){res.innerHTML=`<div class="node-error"><code>TASK FAILED</code>${esc(j.error||"failed")}</div>`;return;}
+    res.innerHTML=`<div class="toolbar"><span class="crumb"><span class="mono">${esc(j.name)}</span>&nbsp;<span class="badge dim">${esc(j.mode)}</span>&nbsp;<span class="badge warn" id="tstate">QUEUED</span></span><button id="tpoll" class="primary">Refresh</button></div><pre class="log" id="tout">waiting…</pre>`;
+    const poll=async()=>{
+      if(!$("#tout")||!$("#tstate"))return;
+      const p=await fetch(`/api/node/${selSerial}/task?name=${encodeURIComponent(j.name)}&mode=${j.mode}`,{cache:"no-store"});
+      const pj=await p.json();
+      const st=taskState(pj.done,pj.exit);
+      const badge=$("#tstate"); if(badge){badge.className="badge "+st.cls;badge.textContent=st.lab;}
+      $("#tout").textContent=`[exit ${pj.exit??"-"}]\n\n${pj.output||"(no output yet)"}`;
+      if(!pj.done){setTimeout(poll,1500);}else{$("#tpoll").style.display="none";}
+    };
+    $("#tpoll").onclick=poll; poll();
+  };
+}
+
+/* ---------- logs ---------- */
+async function showLogs(){
+  const tb=$("#tabbody");
+  tb.innerHTML=`<div class="toolbar">
+    <button data-log="svc" class="logbtn">svc.log</button>
+    <button data-log="agent" class="logbtn">agent.log</button>
+    <button data-log="heart" class="logbtn">agent.heart</button>
+    <button data-log="launch" class="logbtn">launch.log</button>
+    <button id="logrefresh" class="primary" style="margin-left:8px">Refresh</button>
+    </div>
+    <pre class="log" id="lout"><span style="color:var(--faint)">loading…</span></pre>`;
+  const out=$("#lout");
+  let cur="svc";
+  const setActive=()=>{
+    tb.querySelectorAll("[data-log]").forEach(b=>b.classList.toggle("active",b.dataset.log===cur));
+  };
+  const load=()=>{
+    out.innerHTML=`<span style="color:var(--faint)">loading…</span>`;
+    fetch(`/api/node/${selSerial}/logs?name=${cur}`,{cache:"no-store"}).then(r=>r.json()).then(j=>{
+      out.textContent=j.content||"(empty log)";
+    }).catch(()=>{
+      out.textContent="log read failed";
+    });
+  };
+  tb.querySelectorAll("[data-log]").forEach(b=>b.addEventListener("click",()=>{cur=b.dataset.log;setActive();load();}));
+  setActive();
+  $("#logrefresh").onclick=load; load();
+}
+
+/* ---------- bots guide (static knowhow, no adb) ---------- */
+function showGuide(){
+  selGuide=true; curBot=null;
+  $("#title").textContent="Bots guide";
+  $("#crumb").textContent="";
+  $("#content").dataset.view="guide";
+  $("#content").classList.remove("cards");
+  navActive();
+  $("#content").innerHTML=`
+  <div class="h-sec">Two kinds of bots on each tablet</div>
+  <div class="tablewrap"><table class="files"><thead><tr><th>Kind</th><th>Runs as</th><th>Where it lives</th><th>How it starts</th></tr></thead><tbody>
+    <tr><td class="mono">Python / Discord bot</td><td class="mono">Termux (python)</td><td class="mono">/sdcard/EanHost/termux/bots/</td><td>one command inside Termux (see below)</td></tr>
+    <tr><td class="mono">Shell bot</td><td class="mono">device (adb uid)</td><td class="mono">/sdcard/EanHost/bots/</td><td>auto - dropped into the folder, supervisor keeps it alive</td></tr>
+  </tbody></table></div>
+
+  <div class="h-sec">Python / Discord bots (the main path)</div>
+  <div class="card" style="margin-bottom:14px"><h3>Steps</h3>
+    <ol style="font-size:12.5px;line-height:1.9;padding-left:20px">
+      <li>Open a node → <b>Files</b> → jump to <b>termux/bots</b>.</li>
+      <li>Move your bot project into its own folder: <span class="mono">termux/bots/&lt;name&gt;/</span> (everything it needs - <span class="mono">bot.py</span>, <span class="mono">.env</span>, cogs, etc.). The runner launches it with that folder as its working directory.</li>
+      <li>Edit <b>bots.json</b>: one entry per bot - <span class="mono">{"name":"verify","dir":"verify","cmd":"python bot.py"}</span>. Tokens stay inside each bot's own <span class="mono">.env</span>; nothing goes in bots.json.</li>
+      <li>Inside <b>Termux</b> on the tablet, run once: <span class="mono">bash /sdcard/EanHost/termux/bots/start-bots.sh</span>, or just wait ~5s - the Termux agent now auto-launches the runner and re-spawns it if it dies.</li>
+      <li>The runner keeps every bot alive (restarts a crashed bot, crash-loop guard included) and writes its status to <span class="mono">bots.status</span> - that's exactly what the <b>Bots</b> row on the dashboard shows. <b>Click a bot name</b> to open its server page: <b>Console</b> (live log), <b>Files</b> (its folder), <b>Settings</b> (start/stop/restart + config).</li>
+      <li>Logs: node → <b>Files</b> → <span class="mono">termux/bots/run.log</span> (runner) and <span class="mono">termux/bots/run-&lt;name&gt;.log</span> (per bot).</li>
+    </ol>
+  </div>
+
+  <div class="h-sec">Shell bots (supervisor-owned)</div>
+  <div class="card" style="margin-bottom:14px"><h3>Rules</h3>
+    <ul style="font-size:12.5px;line-height:1.9;padding-left:20px">
+      <li>Drop any <span class="mono">*.sh</span> into <b>Files → jump to bots</b>. It must run <b>foreground</b> (a loop or long process).</li>
+      <li>The supervisor respawns it if it dies; pid at <span class="mono">bots/id.&lt;name&gt;.pid</span>, log at <span class="mono">bots/log.&lt;name&gt;</span>.</li>
+      <li><b>Restart</b> button = kill pidfile pid; supervisor brings it back in ~2s.</li>
+      <li><b>Delete the script</b> and the supervisor kills the instance.</li>
+      <li>Good for shell/wget/fetch loops only - no python (adb uid can't exec Termux binaries).</li>
+    </ul>
+  </div>
+
+  <div class="h-sec">One-off jobs</div>
+  <div class="card" style="margin-bottom:14px"><h3>Node → Tasks</h3>
+    <ul style="font-size:12.5px;line-height:1.9;padding-left:20px">
+      <li><b>Device supervisor</b> executor: script runs as shell uid on the tablet; result <span class="mono">results/&lt;name&gt;.out + .exit</span>.</li>
+      <li><b>Termux agent</b> executor: runs under Termux bash; result <span class="mono">termux/outbox/</span>.</li>
+      <li>Result is complete only when the <span class="mono">.exit</span> file exists (it is written last).</li>
+    </ul>
+  </div>
+
+  <div class="h-sec">Path cheat-sheet (node root is /sdcard/EanHost/)</div>
+  <div class="tablewrap"><table class="files"><thead><tr><th>Path</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td class="mono">bots/ + bots/id.*.pid</td><td>shell bots the supervisor keeps alive</td></tr>
+    <tr><td class="mono">termux/bots/ (&lt;name&gt;/ + runner.py + bots.json + bots.status)</td><td>python/Discord bots; runner respawns them, status shown on dashboard</td></tr>
+    <tr><td class="mono">tasks/ → results/ → done/</td><td>one-off jobs (supervisor lane)</td></tr>
+    <tr><td class="mono">termux/inbox/ → termux/outbox/ → termux/done/</td><td>one-off jobs (termux lane)</td></tr>
+    <tr><td class="mono">svc.log / termux/agent.log / termux/bots/run.log</td><td>events for supervisor, agent, runner</td></tr>
+  </tbody></table></div>
+
+  <div class="h-sec">Quick sanity check</div>
+  <div class="card" style="margin-bottom:14px"><h3>Is everything up?</h3>
+    <ul style="font-size:12.5px;line-height:1.9;padding-left:20px">
+      <li><b>Dashboard</b>: green dot on a node = present + supervisor or agent alive.</li>
+      <li><b>Supervisor</b>: green = shell bots will be auto-respawned.</li>
+      <li><b>Termux agent</b>: ALIVE = the termux lane + relaunching a dead bot runner is healthy.</li>
+      <li><b>Bots</b> row: UP / DOWN / STP (stopped) per node. <b>Click a bot's name</b> to open its Console / Files / Settings. Stopped state is remembered in <span class="mono">bots.stopped</span>, so it survives runner restarts.</li>
+      <li>Anything looks dead → Console on that node: <span class="mono">sh /sdcard/EanHost/svc/sstart.sh</span> (supervisor) or <span class="mono">cat /sdcard/EanHost/termux/launch.log</span> (agent).</li>
+    </ul>
+  </div>`;
+}
+
+/* ---------- EZ bot install ---------- */
+let _ezFile=null;
+function ezOpen(){
+  _ezFile=null;
+  const b=$("#ezbox");b.style.display="flex";
+  $("#ezfile").value="";$("#ezfname").textContent="No file chosen";
+  $("#ezname").value="";$("#eztok").value="";$("#ezresult").textContent="";
+  $("#ezresult").style.color="";$("#ezopen").style.display="none";
+  $("#ezname").focus();
+}
+function ezClose(){$("#ezbox").style.display="none";}
+async function ezDo(){
+  const name=($("#ezname").value||"").trim();
+  if(!_ezFile)return toast("Choose a .zip first");
+  if(!/^[A-Za-z0-9_.-]+$/.test(name)||name==="."||name==="..")return toast("Bad name (letters, digits, _ . - only)");
+  const q=new URLSearchParams();q.set("name",name);
+  const tok=($("#eztok").value||"").trim();if(tok)q.set("token",tok);
+  const pr=$("#ezresult");pr.textContent="Installing…";
+  const open=$("#ezopen");
+  try{
+    const r=await fetch(`/api/node/${selSerial}/ezinstall?${q}`,{method:"POST",body:_ezFile});
+    const j=await r.json();
+    if(!r.ok)throw new Error(j.error||("HTTP "+r.status));
+    pr.textContent=JSON.stringify(j,null,2);
+    pr.style.color="var(--green)";
+    if(j.updated){
+      toast(`Updated ${name}`);
+      open.textContent="Open folder / edit code";
+    }else{
+      toast(`Installed ${name}`);
+      open.textContent="Open folder / edit code";
+    }
+    open.style.display="";
+    open.onclick=()=>{ezClose();showFilesAt(`/sdcard/EanHost/termux/bots/${name}`);};
+  }catch(err){pr.textContent="FAILED: "+err.message;pr.style.color="var(--red)";open.style.display="none";}
+}
+document.getElementById("ezfile").addEventListener("change",ev=>{
+  _ezFile=ev.target.files[0]||null;
+  document.getElementById("ezfname").textContent=_ezFile?_ezFile.name:"No file chosen";
+});
+document.getElementById("ezpick").addEventListener("click",()=>document.getElementById("ezfile").click());
+document.getElementById("ezcancel").addEventListener("click",ezClose);
+document.getElementById("ezdo").addEventListener("click",ezDo);
+
+/* ---------- init ---------- */
+function toast(t){
+  const el=$("#toast");el.textContent=t;el.classList.add("show");
+  clearTimeout(toast._t);toast._t=setTimeout(()=>el.classList.remove("show"),2500);
+}
+function init(){
+  refreshStatus();
+  clearInterval(statusTimer);
+  statusTimer=setInterval(refreshStatus,10000);
+  showDashboard();
+}
+</script>
+</body>
+</html>
