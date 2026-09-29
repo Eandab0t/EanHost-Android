@@ -7,6 +7,7 @@ import os
 import re
 import secrets
 import shlex
+import sys
 import subprocess
 import io
 import posixpath
@@ -35,6 +36,7 @@ EZ_MEMBERS = 4000
 EZ_ENTRY_PY = ("bot.py", "main.py", "run.py", "app.py", "index.py", "bot_cog.py")
 _EZ_PY_DISCORD = re.compile(rb"\b(import|from)\s+(discord|disnake|nextcord)\b")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+EZ_ENVKEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 SESSIONS = {}
 LOCK = threading.Lock()
@@ -263,6 +265,170 @@ def status_all():
     return {"nodes": nodes}
 
 
+# ---- resource stats (cpu / ram / disk) -----------------------------------
+# One adb roundtrip per node instead of three. The combined command prints
+# three delimited blocks; parsing is per-block so a missing block (older
+# Android, missing toybox) degrades to None instead of failing the node.
+STAT_CMD = (
+    "cat /proc/meminfo 2>/dev/null; "
+    "echo __CPU__; cat /proc/stat 2>/dev/null; "
+    "echo __DISK__; df -k /data 2>/dev/null; df -k /sdcard 2>/dev/null; true"
+)
+
+_MEM_KB = re.compile(r"^(\w+):\s+(\d+)")
+# standard toybox/bsd: "/dev/block/dm-5  117618516  52345678  61234567  47% /data"
+_DF_PCT = re.compile(r"^(\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)%")
+# older toybox: "/data  12234036.0K  1611628.0K  10622408.0K  4.0K"
+_DF_K = re.compile(r"^(\S+)\s+([\d.]+)K\s+([\d.]+)K\s+([\d.]+)K")
+
+
+def _empty_stats(online):
+    return {"online": online, "cpu": None, "ram": None, "ramTotal": None,
+            "ramPct": None, "disk": None, "diskTotal": None, "diskPct": None}
+
+
+def _parse_mem(block):
+    vals = {}
+    for line in block:
+        m = _MEM_KB.match(line.strip())
+        if m:
+            vals[m.group(1)] = int(m.group(2))
+    total = vals.get("MemTotal")
+    if not total:
+        return None, None, None
+    # MemAvailable is preferred; fall back to the classic free/total/buffers set.
+    avail = vals.get("MemAvailable")
+    if avail is None:
+        free = vals.get("MemFree", 0)
+        avail = free + vals.get("Buffers", 0) + vals.get("Cached", 0)
+    used = max(0, total - avail)
+    return used // 1024, total // 1024, int(100 * used / total)
+
+
+def _parse_cpu(block):
+    for line in block:
+        parts = line.split()
+        # /proc/stat lists cpu0, cpu1, ... first; only the aggregate "cpu" row
+        # is meaningful for a whole-device figure.
+        if len(parts) >= 5 and parts[0] == "cpu":
+            try:
+                vals = [int(p) for p in parts[1:5]]
+            except ValueError:
+                return None
+            total = sum(vals)
+            if total <= 0:
+                return None
+            return int(100 * (total - vals[3]) / total)
+    return None
+
+
+def _parse_disk(block):
+    best = None
+    for line in block:
+        s = line.strip()
+        # skip the "Filesystem 1K-blocks ..." / "Filesystem Size Used ..." header
+        if not s.startswith("/"):
+            continue
+        m = _DF_PCT.match(s)
+        if m:
+            total_k, used_k, pct = int(m.group(2)), int(m.group(3)), int(m.group(5))
+            if total_k > 0:
+                return (used_k // (1024 * 1024), total_k // (1024 * 1024), pct)
+        m = _DF_K.match(s)
+        if m:
+            total_k = int(float(m.group(2)))
+            used_k = int(float(m.group(3)))
+            if total_k > 0:
+                pct = int(100 * used_k / total_k)
+                return (used_k // (1024 * 1024), total_k // (1024 * 1024), pct)
+    return best or (None, None, None)
+
+
+def _split_blocks(text):
+    blocks, cur = {}, []
+    key = "mem"
+    for line in text.splitlines():
+        line = line.rstrip("\r")
+        if line.strip() == "__CPU__":
+            blocks[key] = cur
+            key, cur = "cpu", []
+            continue
+        if line.strip() == "__DISK__":
+            blocks[key] = cur
+            key, cur = "disk", []
+            continue
+        cur.append(line)
+    blocks[key] = cur
+    return blocks
+
+
+def node_stats(serial):
+    """Rough cpu/ram/disk for one node. Never raises."""
+    stats = _empty_stats(False)
+    try:
+        if not dev_present(serial):
+            return stats
+        text = out(adb(serial, STAT_CMD, timeout=20))
+        if not text.strip():
+            return stats
+        stats["online"] = True
+        blocks = _split_blocks(text)
+        ram, ram_total, ram_pct = _parse_mem(blocks.get("mem", []))
+        stats["ram"], stats["ramTotal"], stats["ramPct"] = ram, ram_total, ram_pct
+        stats["cpu"] = _parse_cpu(blocks.get("cpu", []))
+        disk, disk_total, disk_pct = _parse_disk(blocks.get("disk", []))
+        stats["disk"], stats["diskTotal"], stats["diskPct"] = disk, disk_total, disk_pct
+    except Exception:
+        return _empty_stats(True)
+    return stats
+
+
+STATS_T = 10
+STATS_CACHE = {}
+STATS_LOCK = threading.Lock()
+STATS_SIG = None
+
+
+def stats_all():
+    """Cached per-node stats, refreshed at most every STATS_T seconds."""
+    global STATS_SIG
+    with STATS_LOCK:
+        sig = STATS_SIG
+        fresh = sig is not None and (time.time() - sig) < STATS_T
+        if fresh:
+            snap = dict(STATS_CACHE)
+        else:
+            snap = None
+    if snap is not None:
+        return snap
+    results = {}
+
+    def collect(serial):
+        try:
+            results[serial] = node_stats(serial)
+        except Exception:
+            results[serial] = _empty_stats(False)
+
+    tds = [threading.Thread(target=collect, args=(s,), daemon=True)
+           for s, _ in SERIALS]
+    for t in tds:
+        t.start()
+    for t in tds:
+        t.join(timeout=12)
+    now = time.time()
+    out_map = {}
+    for serial, name in SERIALS:
+        s = results.get(serial) or _empty_stats(False)
+        s["name"] = name
+        s["ts"] = int(now)
+        out_map[serial] = s
+    with STATS_LOCK:
+        STATS_CACHE.clear()
+        STATS_CACHE.update(out_map)
+        STATS_SIG = now
+    return out_map
+
+
 LS_RE = re.compile(
     r"^([dl-][rwxsStT-]{9})\s+\d+\s+(\S+)\s+(\S+)\s+"
     r"(?:(\d+)\s+)?(\d{4}-\d{2}-\d{2})"
@@ -355,7 +521,7 @@ def _ez_detect(tree):
     return None
 
 
-def _ez_install(serial, name, data, token):
+def _ez_install(serial, name, data, token=None, env=None):
     """Deploy an uploaded zip as a supervised bot on one device."""
     if not NAME_RE.match(name) or name in (".", ".."):
         raise ValueError("bad bot name (letters, digits, _ . - only)")
@@ -393,7 +559,7 @@ def _ez_install(serial, name, data, token):
     if raw is None:
         r = adb(serial, "[ -f %s ] && echo Y || echo N" % shlex.quote(BOTS_JSON))
         if out(r).strip() == "Y":
-            raise ValueError("could not read device bots.json - nothing installed")
+            raise ValueError("could not read device bots.json, nothing installed")
         conf = {"bots": []}
     else:
         conf = {"bots": []}
@@ -404,15 +570,32 @@ def _ez_install(serial, name, data, token):
         except Exception:
             pass
     existing = any(b.get("name") == name for b in conf["bots"])
-    # give the bot a token: update keeps the live .env; fresh install uses the
-    # zip's .env, else the provided token, else a stub.
+    # env file handling: an update always keeps the live .env; a fresh install
+    # uses the zip's .env, else one built from the supplied env vars, else a
+    # stub the user fills in.
     env_stat = "kept (existing)"
     if existing:
         tree.pop(".env", None)
     elif ".env" not in files:
-        if token:
-            tree[".env"] = ("TOKEN=%s\nDISCORD_TOKEN=%s\n" % (token, token)).encode()
-            env_stat = "created"
+        pairs = []
+        seen = set()
+        for k, v in (env or {}).items():
+            k = str(k)
+            if not EZ_ENVKEY.match(k):
+                continue
+            v = str(v).replace("\r", "").replace("\n", "")
+            if v != "" and k not in seen:
+                seen.add(k)
+                pairs.append("%s=%s" % (k, v))
+        if token and "DISCORD_TOKEN" not in seen:
+            for k in ("TOKEN", "DISCORD_TOKEN"):
+                if k not in seen:
+                    seen.add(k)
+                    pairs.append("%s=%s" % (k, token))
+        if pairs:
+            tree[".env"] = ("\n".join(pairs) + "\n").encode()
+            env_stat = "created (%d var%s)" % (len(pairs),
+                                               "" if len(pairs) == 1 else "s")
         else:
             tree[".env"] = b"# paste your bot token here, then restart in the panel\nTOKEN=\nDISCORD_TOKEN=\n"
             env_stat = "placeholder"
@@ -506,6 +689,50 @@ def new_session():
 
 # ---- http --------------------------------------------------------------
 
+def bot_states(serial, timeout=10):
+    """Parse bots.status into {name: {"state": ..., "pid": ...}}."""
+    text = out(adb(serial,
+                   "cat %s/bots/bots.status 2>/dev/null" % TX,
+                   timeout=timeout))
+    res = {}
+    for line in (text or "").splitlines():
+        f = line.split()
+        if len(f) < 2:
+            continue
+        pid = None
+        for tok in f[2:]:
+            if tok.startswith("pid="):
+                pid = tok[4:]
+        res[f[0]] = {"state": f[1], "pid": pid}
+    return res
+
+
+def wait_bot_state(serial, name, action, before_pid, before_state,
+                   timeout=30):
+    """Block until bots.status shows the action actually took effect.
+
+    The runner only drains bots.ctl every ~10s, so replying straight away
+    left the UI displaying a stale PID and made working buttons look dead.
+    """
+    deadline = time.time() + timeout
+    while True:
+        cur = bot_states(serial).get(name) or {"state": "STP", "pid": None}
+        st = cur.get("state")
+        pid = cur.get("pid")
+        if action == "stop":
+            if st == "STP" or st is None:
+                return True, cur
+        elif action == "start":
+            if st == "UP" and (before_state == "UP" or pid != before_pid):
+                return True, cur
+        elif action == "restart":
+            if st == "UP" and pid and pid != before_pid:
+                return True, cur
+        if time.time() >= deadline:
+            return False, cur
+        time.sleep(1.5)
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "EanHostPanel/1"
@@ -525,6 +752,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, code, obj, **headers):
         body = json.dumps(obj).encode()
+        headers.setdefault("Cache-Control", "no-store")
         self._send(code, body, "application/json", headers)
 
     def _auth(self):
@@ -533,6 +761,8 @@ class Handler(BaseHTTPRequestHandler):
         if q.query:
             qs = urllib.parse.parse_qs(q.query)
             tok = qs.get("t", [None])[0]
+        if not tok:
+            tok = self.headers.get("X-Token")
         if not tok:
             cookie = self.headers.get("Cookie", "")
             m = re.search(r"ean_sess=([0-9a-f]+)", cookie)
@@ -547,10 +777,11 @@ class Handler(BaseHTTPRequestHandler):
         route = u.path
         if route == "/":
             return self.serve_index()
-        if route == "/api/status":
+        if route in ("/api/status", "/api/stats"):
             if not self._auth():
                 return self._json(401, {"error": "unauthorized"})
-            return self._json(200, status_all())
+            return self._json(200, status_all() if route == "/api/status"
+                              else stats_all())
         if route.startswith("/api/node/"):
             return self.api_node_get(u)
         return self._json(404, {"error": "not found"})
@@ -569,7 +800,8 @@ class Handler(BaseHTTPRequestHandler):
             r"const SERIALS=\[.*?\];",
             "const SERIALS=%s;" % nodes_js, src, count=1)
         body = src.encode("utf-8")
-        self._send(200, body, "text/html; charset=utf-8")
+        self._send(200, body, "text/html; charset=utf-8",
+                   {"Cache-Control": "no-store, must-revalidate"})
 
     def api_node_get(self, u):
         if not self._auth():
@@ -689,10 +921,23 @@ class Handler(BaseHTTPRequestHandler):
             if not re.match(r"^[A-Za-z0-9_.-]+$", name) or \
                     action not in ("start", "stop", "restart"):
                 return self._json(400, {"error": "bad bot action"})
+            before = bot_states(serial).get(name) or {}
             ok = write_remote(serial, TX + "/bots/bots.ctl",
                               ("%s %s\n" % (action, name)).encode())
-            return self._json(200 if ok else 500,
-                              {"ok": ok, "name": name, "action": action})
+            if not ok:
+                return self._json(500, {"ok": False, "name": name,
+                                        "action": action,
+                                        "error": "device unreachable"})
+            done, after = wait_bot_state(
+                serial, name, action,
+                before.get("pid"), before.get("state"), timeout=30)
+            return self._json(200 if done else 202,
+                              {"ok": done, "name": name,
+                               "action": action,
+                               "state": after.get("state"),
+                               "pid": after.get("pid"),
+                               "error": None if done else
+                                        "runner did not confirm in 30s"})
         if sub == "cmd":
             body = self.read_json()
             cmd = (body or {}).get("cmd", "")
@@ -781,13 +1026,26 @@ class Handler(BaseHTTPRequestHandler):
                 qs2 = urllib.parse.parse_qs(u.query)
                 name = str(qs2.get("name", [None])[0] or "").strip()
                 token = str(qs2.get("token", [None])[0] or "").strip()
+                env = {}
+                raw_env = str(qs2.get("env", [None])[0] or "").strip()
+                if raw_env:
+                    try:
+                        parsed = json.loads(raw_env)
+                    except Exception:
+                        raise ValueError("env must be a JSON object")
+                    if not isinstance(parsed, dict):
+                        raise ValueError("env must be a JSON object")
+                    for k, v in parsed.items():
+                        if not EZ_ENVKEY.match(str(k)):
+                            continue
+                        env[str(k)] = str(v)
                 n = int(self.headers.get("Content-Length") or 0)
                 if n > EZ_LIMIT:
                     return self._json(413, {"error": "zip too large"})
                 if not name:
                     return self._json(400, {"error": "missing bot name"})
                 data = self.rfile.read(n)
-                res = _ez_install(serial, name, data, token)
+                res = _ez_install(serial, name, data, token, env)
                 return self._json(200, res)
             except ValueError as e:
                 return self._json(422, {"error": str(e)})
@@ -797,8 +1055,17 @@ class Handler(BaseHTTPRequestHandler):
 # ---- app --------------------------------------------------------------
 
 def serve(port, bind):
+    class Server(ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            et = sys.exc_info()[0]
+            if et in (ConnectionResetError, BrokenPipeError):
+                return
+            super().handle_error(request, client_address)
+
     threading.Thread(target=refresh_status_loop, daemon=True).start()
-    httpd = ThreadingHTTPServer((bind, port), Handler)
+    httpd = Server((bind, port), Handler)
     print(f"panel http on {bind}:{port}")
     httpd.serve_forever()
 
