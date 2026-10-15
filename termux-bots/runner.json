@@ -1,0 +1,6 @@
+{
+  "fast": true,
+  "tcp_bind": "127.0.0.1",
+  "tcp_port": 19000,
+  "inotify": true
+}

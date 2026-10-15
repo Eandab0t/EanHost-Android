@@ -141,6 +141,18 @@ label{display:block;font-size:12px;font-weight:600;color:var(--dim);margin-botto
 .card-h .r{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
 .batt{font-size:11.5px;color:var(--dim);display:flex;align-items:center;gap:4px}
 .batt .g{color:var(--yellow)}
+.lat{font-size:11px;font-family:var(--mono);color:var(--faint);display:flex;align-items:center;gap:4px}
+.lat b{color:var(--dim);font-weight:600}
+.lat.good b{color:var(--green)}
+.lat.mid b{color:var(--yellow)}
+.lat.bad b{color:var(--red)}
+
+/* global actions bar */
+.gbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:16px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:12px 14px;box-shadow:var(--sh)}
+.gbar .lbl{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--faint);margin-right:4px}
+.gbar .sp{flex:1}
 
 /* resource bars */
 .res{margin-bottom:13px}
@@ -497,7 +509,9 @@ const TOK=()=>localStorage.getItem("tok")||"";
 const devName=s=>(SERIALS.find(x=>x[0]===s)||[])[1]||s;
 const nodes=()=>SERIALS.map(([serial])=>serial);
 
-let status=null, stats=null, sel=null, selBot=null, view="dashboard", timers={}, pollId=0, curTab="";
+let status=null, stats=null, panelCfg=null, sel=null, selBot=null, view="dashboard", timers={}, pollId=0, curTab="";
+const globBusy=new Set();
+const logOff={};
 
 /* ---------- auth ---------- */
 async function api(path,opts={}){
@@ -597,6 +611,10 @@ async function loadStats(){
   try{stats=await jget("/api/stats")}
   catch(e){stats=null}
 }
+async function loadConfig(){
+  try{panelCfg=await jget("/api/config")}
+  catch(e){panelCfg=null}
+}
 function clearPoll(){
   for(const k in timers){clearInterval(timers[k]);delete timers[k]}
 }
@@ -635,6 +653,7 @@ function nodeCard(n){
         <span class="badge ${online?"ok":"bad"}" data-f="badge">
           <span class="dot ${online?"ok":"bad"}"></span><span data-f="badge-t">${online?"Online":"Offline"}</span></span>
         <span class="batt" data-f="batt"${batt==null?' style="display:none"':""}>${chatt(chg)}${batt!=null?batt+"%":""}</span>
+        ${latChip(n)}
       </div>
     </div>
     ${resBar("CPU",cpuTxt,s?s.cpuPct!=null?s.cpuPct:cpu:null,"cpu","cpu")}
@@ -649,9 +668,23 @@ function nodeCard(n){
   </div>`;
 }
 function chatt(c){return c?'<span class="g">&#9889;</span>':""}
+function latCls(ms){
+  if(ms==null||isNaN(ms))return "lat";
+  if(ms<120)return "lat good";
+  if(ms<400)return "lat mid";
+  return "lat bad";
+}
+function latChip(n){
+  const ms=n.latency_ms;
+  const txt=ms==null?"--":ms+" ms";
+  const via=n.latency_via?" &#183; "+esc(n.latency_via):"";
+  return `<span class="${latCls(ms)}" data-f="lat" title="Heartbeat round-trip"><span>&#9679;</span><b>${txt}</b>${via}</span>`;
+}
 function botRow(serial,name,st){
   const cls=st==="UP"?"UP":(st==="STP"?"STP":"other");
+  const dot=st==="UP"?"ok":(st==="STP"?"bad":"warn");
   return `<div class="brow">
+    <span class="dot ${dot}"></span>
     <button class="nm" data-bot="${esc(name)}" data-s="${esc(serial)}" title="Open console">${esc(name)}</button>
     <span class="st ${cls}">${esc(st||"?")}</span>
     <span class="acts">
@@ -699,6 +732,14 @@ function diffDash(){
       const html=chatt(chg)+batt+"%";
       if(bt.innerHTML!==html)bt.innerHTML=html;
     }else if(bt&&bt.style.display!=="none")bt.style.display="none";
+    const lt=card.querySelector('[data-f="lat"]');
+    if(lt){
+      const ms=n.latency_ms;
+      const cls=latCls(ms);
+      if(lt.className!==cls)lt.className=cls;
+      const html=`<span>&#9679;</span><b>${ms==null?"--":ms+" ms"}</b>${n.latency_via?" &#183; "+n.latency_via:""}`;
+      if(lt.innerHTML!==html)lt.innerHTML=html;
+    }
     setF(card,"cpu-v",cpu==null?"--":cpu+"%");
     setF(card,"ram-v",(ram==null||ramT==null)?"--":ram+" / "+ramT+" MB");
     setF(card,"dsk-v",(dsk==null||dskT==null)?"--":dsk+" / "+dskT+" GB");
@@ -731,6 +772,21 @@ function render(){
   else if(view==="console")renderConsolePage();
   else renderSettings();
 }
+function globalBar(){
+  if(!panelCfg||!panelCfg.global_actions_enabled)return "";
+  const acts=[
+    ["start_all","Start All","btn-ok"],
+    ["stop_all","Stop All","btn-dan"],
+    ["update_all","Update All Scripts",""],
+    ["clear_logs","Clear All Logs",""]
+  ];
+  return `<div class="gbar" id="gbar">
+    <span class="lbl">Fleet</span>
+    ${acts.map(([a,l,c])=>`<button class="btn btn-sm ${c}" data-gal="${a}">${l}</button>`).join("")}
+    <span class="sp"></span>
+    <span class="note" id="gnote">applies to every online node</span>
+  </div>`;
+}
 function renderDash(){
   const c=$("#content");
   const list=status.nodes||[];
@@ -741,14 +797,41 @@ function renderDash(){
       <h2>${view==="nodes"?"All nodes":"Fleet overview"}</h2>
       <span class="sub">${up} of ${list.length} online &middot; stats every ${POLL/1000}s</span>
     </div>
+    ${globalBar()}
     <div class="grid" id="grid">${
       list.length?list.map(nodeCard).join("")
       :'<div class="empty"><div class="ic">&#128421;</div><div class="b">No nodes configured</div><div class="h">Add nodes to config.json on the server.</div></div>'
     }</div>`;
   wireCards();
 }
+async function globalAct(action,btn){
+  if(globBusy.has(action))return;
+  const labels={start_all:"Starting",stop_all:"Stopping",
+    update_all:"Updating",clear_logs:"Clearing"};
+  if(!confirm(`${labels[action]||action} across all online nodes?`))return;
+  globBusy.add(action);
+  if(btn)btn.classList.add("busy");
+  const note=$("#gnote");
+  if(note)note.textContent=(labels[action]||action)+" all nodes...";
+  try{
+    const j=await jpost("/api/global",{action});
+    const nodes=j.nodes||{};
+    const okN=Object.values(nodes).filter(v=>v&&v.ok).length;
+    const tot=Object.keys(nodes).length;
+    if(note)note.textContent=`${labels[action]||action}: ${okN}/${tot} ok`;
+    toast(`${action}: ${okN}/${tot} nodes ok`,okN?"ok":"er");
+  }catch(e){
+    if(note)note.textContent="failed: "+e.message;
+    toast("global action failed","er");
+  }
+  globBusy.delete(action);
+  if(btn)btn.classList.remove("busy");
+  await loadStatus();
+  if(view==="dashboard"||view==="nodes"){if(!diffDash())render()}else if(view==="bots")renderBots();
+}
 function wireCards(){
   const g=$("#grid");if(!g)return;
+  document.querySelectorAll("[data-gal]").forEach(b=>b.onclick=()=>globalAct(b.dataset.gal,b));
   g.querySelectorAll("[data-go]").forEach(b=>b.onclick=()=>{
     const card=b.closest("[data-serial]");
     const s=card?card.dataset.serial:nodes()[0];
@@ -998,7 +1081,7 @@ df -h /data
         <pre class="out" id="tout">(no output)</pre>
       </div>`}`;
   c.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{consoleTab=b.dataset.tab;renderConsolePage()});
-  $("#cnode").onchange=e=>{sel=e.target.value;consoleSel=sel;renderConsolePage()};
+  $("#cnode").onchange=e=>{sel=e.target.value;consoleSel=sel;for(const k in logOff)delete logOff[k];renderConsolePage()};
   $("#creload").onclick=()=>{if(consoleTab==="logs")loadLog(consoleBot||"");else pollTask()};
   if(consoleTab==="logs"){
     const botSel=$("#cbot");
@@ -1009,7 +1092,7 @@ df -h /data
       if(timers.log){clearInterval(timers.log);delete timers.log}
       if(on){timers.log=setInterval(()=>loadLog(botSel.value),5000)}
     };
-    botSel.onchange=e=>{consoleBot=e.target.value;loadLog(consoleBot)};
+    botSel.onchange=e=>{consoleBot=e.target.value;logOff[sel+"|"+(e.target.value||"svc")]=undefined;delete logOff[sel+"|"+(e.target.value||"svc")];loadLog(consoleBot)};
     $("#cauto2").onclick=()=>auto(!timers.log);
     $("#prun").onclick=runCmd;
     $("#pcmd").addEventListener("keydown",e=>{if(e.key==="Enter")runCmd()});
@@ -1057,17 +1140,36 @@ function botsOn(s){
   const n=status&&status.nodes.find(x=>x.serial===s);
   return n&&n.bots?Object.keys(n.bots):[];
 }
+/* Incremental log rendering. Fast Mode returns {content,size,offset,reset};
+   since= offers byte-offset streaming so only new bytes are fetched. The legacy
+   adb path returns no size, so we always full-replace. */
+function applyLog(out,key,j){
+  const txt=j.content||"(empty)";
+  const size=j.size;
+  const stick=out.scrollTop+out.clientHeight>=out.scrollHeight-30;
+  if(size==null){
+    out.textContent=txt.split("\n").slice(-1200).join("\n");
+    return;
+  }
+  if(j.reset||logOff[key]==null){
+    out.textContent=txt.split("\n").slice(-1200).join("\n");
+  }else if(txt){
+    out.textContent+=txt;
+    if(out.textContent.length>240000)out.textContent=out.textContent.slice(-140000);
+  }
+  logOff[key]=j.offset!=null?j.offset:size;
+  if(stick)out.scrollTop=out.scrollHeight;
+}
 async function loadLog(bot){
   const out=$("#logout");if(!out)return;
+  const key=sel+"|"+(bot||consoleLog||"svc");
   try{
     const q=bot?`name=botrun&bot=${encodeURIComponent(bot)}`:`name=${consoleLog}`;
-    const j=await jget(`/api/node/${sel}/logs?${q}`);
-    const t=j.content||"(empty)";
-    const lines=t.split("\n");
-    const stick=out.scrollTop+out.clientHeight>=out.scrollHeight-30;
-    out.textContent=lines.slice(-1200).join("\n");
-    if(stick)out.scrollTop=out.scrollHeight;
-  }catch(e){out.textContent="read failed: "+e.message}
+    let url=`/api/node/${sel}/logs?${q}`;
+    if(bot&&logOff[key]!=null)url+=`&since=${logOff[key]}`;
+    const j=await jget(url);
+    applyLog(out,key,j);
+  }catch(e){out.textContent="read failed: "+e.message;delete logOff[key]}
 }
 async function runCmd(){
   const i=$("#pcmd"),out=$("#logout");
@@ -1083,13 +1185,14 @@ async function runCmd(){
 }
 function openConsole(serial,bot){
   sel=serial;consoleSel=serial;consoleBot=bot||null;
+  for(const k in logOff)delete logOff[k];
   const d=$("#console");
   d.classList.add("on");
   $("#ctitle").textContent=devName(serial)+(bot?" / "+bot:"");
   const bots=botsOn(serial);
   $("#csel").innerHTML=`<select id="cbsel">${bots.map(b=>`<option value="${esc(b)}"${b===bot?" selected":""}>${esc(b)}</option>`).join("")||'<option value="">device logs</option>'}</select>
     <button class="btn btn-sm" id="ccfull">Open full page</button>`;
-  $("#cbsel").onchange=e=>{consoleBot=e.target.value;drawConsole()};
+  $("#cbsel").onchange=e=>{consoleBot=e.target.value;const k=consoleSel+"|"+(e.target.value||"svc");delete logOff[k];drawConsole()};
   $("#ccfull").onclick=()=>{closeConsole();view="console";go("console")};
   $("#cclose").onclick=closeConsole;
   drawConsole();
@@ -1102,13 +1205,15 @@ function closeConsole(){
 }
 async function drawConsole(){
   const out=$("#cout");
+  const key=consoleSel+"|"+(consoleBot||"svc");
   try{
     const q=consoleBot?`name=botrun&bot=${encodeURIComponent(consoleBot)}`:"name=svc";
-    const j=await jget(`/api/node/${consoleSel}/logs?${q}`);
-    const lines=(j.content||"(empty)").split("\n");
-    out.textContent=lines.slice(-600).join("\n");
+    let url=`/api/node/${consoleSel}/logs?${q}`;
+    if(consoleBot&&logOff[key]!=null)url+=`&since=${logOff[key]}`;
+    const j=await jget(url);
+    applyLog(out,key,j);
     out.scrollTop=out.scrollHeight;
-  }catch(e){out.textContent="read failed: "+e.message}
+  }catch(e){out.textContent="read failed: "+e.message;delete logOff[key]}
 }
 $("#cauto").onclick=()=>{
   const b=$("#cauto");
@@ -1331,6 +1436,7 @@ async function boot(){
   buildNav();
   await loadStatus();
   await loadStats();
+  await loadConfig();
   render();
   clearInterval(pollId);
   pollId=setInterval(tick,POLL);

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """EanHost web panel - manage both tablets (files, console, tasks, logs) over adb."""
 import argparse
-import gzip
 import hashlib
 import json
 import os
 import re
 import secrets
 import shlex
+import socket
 import sys
 import subprocess
 import io
@@ -42,12 +42,35 @@ EZ_ENVKEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SESSIONS = {}
 LOCK = threading.Lock()
 
+# Fast Mode keeps opt-in so live bots on the legacy adb/file path are never
+# disturbed: with fast_mode False every helper below falls straight through to
+# the original adb implementation.
+FAST_DEFAULTS = {
+    "fast_mode": False,
+    "fast_nodes": [],          # empty = every node when fast_mode is on
+    "tcp_forward_base": 19000,  # host localhost port for node 0 (node N = base+N)
+    "tcp_ports": {},            # per-serial override {serial: port}
+    "tcp_hosts": {},            # per-serial override {serial: host}, default 127.0.0.1
+    "adb_timeout": 30,
+    "inotify_enabled": True,
+    "ram_base": "/data/data/com.termux/files/home/eanhost/ram",
+    "fallback_to_files": True,
+    "global_actions_enabled": True,
+    "log_poll_ms": 2000,
+}
+
 
 def cfg_load():
-    if not os.path.exists(CONFIG):
-        return {}
-    with open(CONFIG) as f:
-        return json.load(f)
+    cfg = {}
+    if os.path.exists(CONFIG):
+        try:
+            with open(CONFIG) as f:
+                cfg = json.load(f) or {}
+        except Exception:
+            cfg = {}
+    merged = dict(FAST_DEFAULTS)
+    merged.update(cfg)
+    return merged
 
 
 def nodes_from_cfg(cfg):
@@ -60,6 +83,160 @@ def nodes_from_cfg(cfg):
 
 
 SERIALS = nodes_from_cfg(cfg_load())
+
+
+
+# ---- Fast Mode: persistent TCP bridge to device-side runner --------------
+TCP_CONN_TIMEOUT = 5.0
+TCP_READ_TIMEOUT = 30.0
+
+
+class TCPClient(object):
+    """Connection-reusing JSON-line client, one socket per (host, port).
+
+    Each socket gets its own lock so concurrent panel threads can queue on a
+    shared connection instead of interleaving request/response frames.
+    """
+
+    def __init__(self):
+        self._conns = {}
+        self._lock = threading.Lock()
+
+    def drop(self, key):
+        with self._lock:
+            conn = self._conns.pop(key, None)
+        if conn is not None:
+            try:
+                conn["sock"].close()
+            except Exception:
+                pass
+
+    def _conn(self, addr, port):
+        key = (addr, int(port))
+        with self._lock:
+            conn = self._conns.get(key)
+            if conn is not None:
+                return conn
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(TCP_CONN_TIMEOUT)
+            s.connect((addr, int(port)))
+            s.settimeout(TCP_READ_TIMEOUT)
+            conn = {"sock": s, "lock": threading.Lock()}
+            self._conns[key] = conn
+            return conn
+
+    def call(self, addr, port, payload, timeout=TCP_READ_TIMEOUT):
+        """Send one JSON object, read one JSON reply line. Returns (obj, err)."""
+        key = (addr, int(port))
+        try:
+            conn = self._conn(addr, port)
+            # A half-open socket only surfaces on write; drop and retry once.
+            for attempt in (0, 1):
+                try:
+                    with conn["lock"]:
+                        sock = conn["sock"]
+                        sock.settimeout(timeout)
+                        sock.sendall(
+                            json.dumps(payload).encode("utf-8") + b"\n")
+                        buf = b""
+                        while b"\n" not in buf:
+                            chunk = sock.recv(4096)
+                            if not chunk:
+                                raise EOFError("connection closed")
+                            buf += chunk
+                            if len(buf) > 1024 * 1024:
+                                raise ValueError("reply too large")
+                    line = buf.split(b"\n", 1)[0]
+                    return json.loads(
+                        line.decode("utf-8", errors="replace")), None
+                except (EOFError, ConnectionError, OSError):
+                    self.drop(key)
+                    if attempt == 1:
+                        raise
+                    conn = self._conn(addr, port)
+        except Exception as e:
+            self.drop(key)
+            return None, str(e)
+
+
+tcp_pool = TCPClient()
+
+_FWD_LOCK = threading.Lock()
+_FWD_DONE = set()
+
+
+def ensure_forward(serial):
+    """Idempotently map host 127.0.0.1:<port> -> device <port> over adb.
+
+    Termux cannot expose a public socket on most setups, so the panel reaches
+    the runner through an adb reverse/forward tunnel. This is a no-op once the
+    forward exists for the process lifetime.
+    """
+    if not fast_enabled(serial):
+        return False
+    if serial in _FWD_DONE:
+        return True
+    host, port = tcp_endpoint(serial)
+    if host not in ("127.0.0.1", "localhost"):
+        # Direct TCP to the device's own IP: no adb hop needed.
+        with _FWD_LOCK:
+            _FWD_DONE.add(serial)
+        return True
+    try:
+        subprocess.run(
+            ["adb", "-s", serial, "forward", f"tcp:{port}", f"tcp:{port}"],
+            capture_output=True, timeout=15)
+        with _FWD_LOCK:
+            _FWD_DONE.add(serial)
+        return True
+    except Exception:
+        return False
+
+
+def fast_enabled(serial=None):
+    cfg = cfg_load()
+    if not cfg.get("fast_mode"):
+        return False
+    if serial is None:
+        return True
+    nodes = cfg.get("fast_nodes")
+    if isinstance(nodes, list) and nodes:
+        return serial in nodes
+    return True
+
+
+def tcp_endpoint(serial):
+    """Resolve (host, port) for a device's runner socket from config."""
+    cfg = cfg_load()
+    hosts = cfg.get("tcp_hosts") or {}
+    base = int(cfg.get("tcp_forward_base", 19000))
+    ports = cfg.get("tcp_ports") or {}
+    order = [s for s, _ in SERIALS]
+    try:
+        idx = order.index(serial)
+    except ValueError:
+        idx = 0
+    host = hosts.get(serial) or "127.0.0.1"
+    port = int(ports.get(serial, base + idx))
+    return host, port
+
+
+def fast_call(serial, payload, timeout=TCP_READ_TIMEOUT):
+    """Try the TCP path. Returns dict on success, None to signal fallback.
+
+    Any failure (no tunnel, refused, timeout, malformed reply) returns None so
+    the caller transparently uses the legacy adb implementation.
+    """
+    if not fast_enabled(serial):
+        return None
+    ensure_forward(serial)
+    host, port = tcp_endpoint(serial)
+    res, err = tcp_pool.call(host, port, payload, timeout=timeout)
+    if err is not None or not isinstance(res, dict):
+        return None
+    if res.get("ok") is False and res.get("error") == "unknown":
+        return None
+    return res
 
 
 def hash_pw(pw):
@@ -194,6 +371,9 @@ def agent_status(serial):
 
 
 def bots_status(serial):
+    res = fast_call(serial, {"cmd": "status"}, timeout=5.0)
+    if res is not None and isinstance(res.get("bots"), dict):
+        return res["bots"] or None
     text = out(adb(serial, f"cat {TX}/bots/bots.status 2>/dev/null", timeout=10))
     bots = {}
     for ln in text.splitlines():
@@ -203,6 +383,20 @@ def bots_status(serial):
     return bots or None
 
 
+def node_latency(serial, timeout=4.0):
+    """Round-trip time to the node, in ms. Fast Mode pings the runner socket;
+    the legacy path times a trivial adb shell round-trip. Returns (ms, via)."""
+    t0 = time.time()
+    if fast_enabled(serial):
+        r = fast_call(serial, {"cmd": "ping"}, timeout=timeout)
+        if r is not None and r.get("ok"):
+            return int((time.time() - t0) * 1000), "tcp"
+    r = adb(serial, "echo .", timeout=timeout)
+    if r is None:
+        return None, "adb"
+    return int((time.time() - t0) * 1000), "adb"
+
+
 def status_light(serial):
     p = dev_present(serial)
     if not p:
@@ -210,9 +404,12 @@ def status_light(serial):
     b = battery(serial)
     sup = supervisor_status(serial)
     ag, ag_age, ag_alive = agent_status(serial)
+    lat, lat_via = node_latency(serial)
     return {
         "present": True,
         "battery": b,
+        "latency_ms": lat,
+        "latency_via": lat_via,
         "supervisor": sup,
         "agent": ag,
         "agent_alive": ag_alive,
@@ -691,11 +888,18 @@ def new_session():
 # ---- http --------------------------------------------------------------
 
 def bot_states(serial, timeout=10):
-    """Parse bots.status into {name: {"state": ..., "pid": ...}}."""
+    """Parse bots.status into {name: {"state": ..., "pid": ...}}.
+
+    Fast Mode asks the runner directly over TCP, which bypasses both the ~10s
+    on-disk refresh cadence and the adb round-trip.
+    """
+    res = fast_call(serial, {"cmd": "status"}, timeout=min(5.0, timeout))
+    if res is not None and isinstance(res.get("bots_detail"), dict):
+        return res["bots_detail"]
     text = out(adb(serial,
                    "cat %s/bots/bots.status 2>/dev/null" % TX,
                    timeout=timeout))
-    res = {}
+    result = {}
     for line in (text or "").splitlines():
         f = line.split()
         if len(f) < 2:
@@ -704,8 +908,8 @@ def bot_states(serial, timeout=10):
         for tok in f[2:]:
             if tok.startswith("pid="):
                 pid = tok[4:]
-        res[f[0]] = {"state": f[1], "pid": pid}
-    return res
+        result[f[0]] = {"state": f[1], "pid": pid}
+    return result
 
 
 def wait_bot_state(serial, name, action, before_pid, before_state,
@@ -742,17 +946,6 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def _send(self, code, body=b"", ctype="application/json", headers=None):
-        try:
-            enc = self.headers.get("Accept-Encoding", "") or ""
-            text = ctype.startswith("text/") or ctype in (
-                "application/json", "application/javascript")
-            if ("gzip" in enc and self.command != "HEAD"
-                    and text and len(body) > 1024):
-                body = gzip.compress(body, compresslevel=6)
-                headers = dict(headers or {})
-                headers["Content-Encoding"] = "gzip"
-        except Exception:
-            pass
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -789,11 +982,30 @@ class Handler(BaseHTTPRequestHandler):
         route = u.path
         if route == "/":
             return self.serve_index()
-        if route in ("/api/status", "/api/stats"):
+        if route == "/api/status":
             if not self._auth():
                 return self._json(401, {"error": "unauthorized"})
-            return self._json(200, status_all() if route == "/api/status"
-                              else stats_all())
+            return self._json(200, status_all())
+        if route == "/api/stats":
+            if not self._auth():
+                return self._json(401, {"error": "unauthorized"})
+            return self._json(200, stats_all())
+        if route == "/api/config":
+            if not self._auth():
+                return self._json(401, {"error": "unauthorized"})
+            cfg = cfg_load()
+            return self._json(200, {
+                "fast_mode": bool(cfg.get("fast_mode")),
+                "fast_nodes": cfg.get("fast_nodes") or [],
+                "global_actions_enabled": bool(
+                    cfg.get("global_actions_enabled", True)),
+                "log_poll_ms": int(cfg.get("log_poll_ms", 2000)),
+                "nodes": [
+                    {"serial": s, "name": n,
+                     "fast": fast_enabled(s)}
+                    for s, n in SERIALS
+                ],
+            })
         if route.startswith("/api/node/"):
             return self.api_node_get(u)
         return self._json(404, {"error": "not found"})
@@ -846,8 +1058,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if sub == "logs":
             which = qs.get("name", ["svc"])[0]
-            content = self.read_log(serial, which, qs.get("bot", [None])[0])
-            return self._json(200, {"log": which, "content": content})
+            res = self.read_log(serial, which, qs.get("bot", [None])[0],
+                                since=qs.get("since", [None])[0])
+            return self._json(200, res)
         if sub == "task":
             tname = qs.get("name", [None])[0]
             mode = qs.get("mode", ["supervisor"])[0]
@@ -856,7 +1069,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, self.poll_task(serial, mode, tname))
         return self._json(404, {"error": "not found"})
 
-    def read_log(self, serial, which, bot=None):
+    def read_log(self, serial, which, bot=None, since=None):
+        """Return {"log","content","size"?, "fast"?}.
+
+        In Fast Mode a botrun log is fetched over TCP and supports incremental
+        reads: the caller passes the last ``size`` it saw and only the new
+        bytes come back. Legacy adb reads always return the tail with no size,
+        which the UI treats as a full replace.
+        """
+        if which == "botrun" and bot:
+            safe = re.sub(r"[^A-Za-z0-9_.-]", "", bot)
+            req = {"cmd": "log", "name": safe, "tail": 65536}
+            if since is not None and str(since) != "":
+                try:
+                    req["since"] = int(since)
+                except (TypeError, ValueError):
+                    pass
+            r = fast_call(serial, req, timeout=8.0)
+            if r is not None and isinstance(r.get("content"), str):
+                out = {"log": which, "content": r["content"],
+                       "size": int(r.get("size", 0) or 0),
+                       "offset": int(r.get("offset", 0) or 0),
+                       "fast": True}
+                if r.get("reset"):
+                    out["reset"] = True
+                return out
         fn = {"svc": "/sdcard/EanHost/svc.log",
               "agent": TX + "/agent.log",
               "heart": TX + "/agent.heart",
@@ -864,16 +1101,16 @@ class Handler(BaseHTTPRequestHandler):
         if which == "botrun":
             fn = TX + "/bots/run-" + re.sub(r"[^A-Za-z0-9_.-]", "", bot or "") + ".log"
         if not fn:
-            return "unknown log"
+            return {"log": which, "content": "unknown log"}
         data = read_remote(serial, fn, cap=64 * 1024)
         if data in (None, b""):
-            return ""
+            return {"log": which, "content": ""}
         try:
             s = data.decode(errors="replace")
         except Exception:
             s = repr(data)[:65536]
         lines = s.splitlines()
-        return "\n".join(lines[-1500:])
+        return {"log": which, "content": "\n".join(lines[-1500:])}
 
     def poll_task(self, serial, mode, name):
         if mode == "termux":
@@ -896,9 +1133,63 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(401, {"error": "unauthorized"})
         if route == "/api/logout":
             return self._json(200, {"ok": True})
+        if route == "/api/global":
+            return self.api_global(u)
         if route.startswith("/api/node/"):
             return self.api_node_post(u)
         return self._json(404, {"error": "not found"})
+
+    def api_global(self, u):
+        body = self.read_json() or {}
+        action = str(body.get("action") or "").strip().lower()
+        one = str(body.get("serial") or "").strip()
+        if action not in ("start_all", "stop_all", "update_all",
+                          "clear_logs"):
+            return self._json(400, {"error": "bad global action"})
+        if not cfg_load().get("global_actions_enabled", True):
+            return self._json(403, {"error": "global actions disabled"})
+        known = [s for s, _ in SERIALS]
+        targets = [one] if one in known else known
+        results = {}
+        for serial in targets:
+            r = fast_call(serial, {"cmd": "global", "action": action},
+                          timeout=25.0)
+            if r is not None and r.get("ok"):
+                results[serial] = {"via": "tcp",
+                                   "detail": {k: r.get(k) for k in
+                                              ("sent", "started", "stopped",
+                                               "cleared", "updated", "errors")
+                                              if k in r}}
+                continue
+            results[serial] = self._global_legacy(serial, action)
+        return self._json(200, {"ok": True, "action": action,
+                                "results": results})
+
+    def _global_legacy(self, serial, action):
+        states = bot_states(serial)
+        if action in ("start_all", "stop_all"):
+            verb = "start" if action == "start_all" else "stop"
+            lines = []
+            for name, st in states.items():
+                state = (st or {}).get("state")
+                if verb == "stop" and state == "STP":
+                    continue
+                if verb == "start" and state == "UP":
+                    continue
+                lines.append("%s %s" % (verb, name))
+            if not lines:
+                return {"via": "adb", "sent": 0, "ok": True}
+            ok = write_remote(serial, TX + "/bots/bots.ctl",
+                              ("\n".join(lines) + "\n").encode())
+            return {"via": "adb", "sent": len(lines), "ok": ok}
+        if action == "clear_logs":
+            r = adb(serial,
+                    "for f in %s/bots/run-*.log; do : > \"$f\"; done" % TX)
+            return {"via": "adb", "ok": ret(r) == 0}
+        if action == "update_all":
+            return {"via": "adb", "ok": False,
+                    "error": "update_all needs Fast Mode (TCP) enabled"}
+        return {"error": "unknown action"}
 
     def read_json(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -934,8 +1225,16 @@ class Handler(BaseHTTPRequestHandler):
                     action not in ("start", "stop", "restart"):
                 return self._json(400, {"error": "bad bot action"})
             before = bot_states(serial).get(name) or {}
-            ok = write_remote(serial, TX + "/bots/bots.ctl",
-                              ("%s %s\n" % (action, name)).encode())
+            ok = False
+            via = "adb"
+            res = fast_call(serial, {"cmd": "bot", "action": action,
+                                     "name": name}, timeout=8.0)
+            if res is not None and res.get("ok"):
+                ok = True
+                via = "tcp"
+            if not ok:
+                ok = write_remote(serial, TX + "/bots/bots.ctl",
+                                  ("%s %s\n" % (action, name)).encode())
             if not ok:
                 return self._json(500, {"ok": False, "name": name,
                                         "action": action,
@@ -945,7 +1244,7 @@ class Handler(BaseHTTPRequestHandler):
                 before.get("pid"), before.get("state"), timeout=30)
             return self._json(200 if done else 202,
                               {"ok": done, "name": name,
-                               "action": action,
+                               "action": action, "via": via,
                                "state": after.get("state"),
                                "pid": after.get("pid"),
                                "error": None if done else
