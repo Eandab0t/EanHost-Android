@@ -182,7 +182,7 @@ Things that are VERIFIED:
 
 ## Web panel (EanHost Control)
 
-- URL: `http://<host-ip>:8443` (HTTP, from LAN). Panel binds 0.0.0.0:8443,
+- URL: `http://<host-ip>:8080` (HTTP, from LAN). Panel binds 0.0.0.0:8080,
   stdlib only (`http.server` + calls to adb), runs as whatever user starts it.
   The adb server must be running for the panel (`adb -L tcp:5037 fork-server`).
 - Single admin password: sha256 in `panel/config.json`. Change it:
@@ -190,7 +190,7 @@ Things that are VERIFIED:
   restart needed; read per request).
 - Start/stop (also wired into `eanhost-up.sh`):
   `bash panel/start.sh`  (idempotent, single instance)
-  `pkill -f 'panel.py --port 8443'`
+  `pkill -f 'panel.py --port 8080'`
 - Features: dashboard (battery/supervisor/agent/bots per node), per-node tabs
   Files / Console / Tasks / Logs. Files root is `/sdcard` (pull/push via adb).
   Tasks = supervisor (`tasks/`) or termux (`inbox/`) executors, polls for

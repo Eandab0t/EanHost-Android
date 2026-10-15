@@ -1393,7 +1393,7 @@ def set_password(pw):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8443)
+    ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--set-pass", default=None)
     args = ap.parse_args()
