@@ -688,6 +688,7 @@ function botRow(serial,name,st){
     <button class="nm" data-bot="${esc(name)}" data-s="${esc(serial)}" title="Open console">${esc(name)}</button>
     <span class="st ${cls}">${esc(st||"?")}</span>
     <span class="acts">
+      <button class="btn btn-sm" data-act="sync" data-s="${esc(serial)}" data-b="${esc(name)}" title="Sync from git">&#8681;</button>
       ${st==="UP"
         ? `<button class="btn btn-sm" data-act="restart" data-s="${esc(serial)}" data-b="${esc(name)}">&#8635;</button>
            <button class="btn btn-sm btn-dan" data-act="stop" data-s="${esc(serial)}" data-b="${esc(name)}">&#9632;</button>`
@@ -857,7 +858,12 @@ async function botAct(serial,name,action,btn){
   let ok=false,msg="";
   try{
     const j=await jpost(`/api/node/${serial}/bot`,{name,action});
-    ok=!!j.ok; msg=ok?`${name}: ${action} ok${j.pid?" (pid "+j.pid+")":""}`:(j.error||"failed");
+    if(action==="sync"){
+      ok=!!j.ok;
+      msg=ok?`${name}: synced${j.rev?" ("+j.rev+")":""}`:(j.error||"sync failed");
+    }else{
+      ok=!!j.ok; msg=ok?`${name}: ${action} ok${j.pid?" (pid "+j.pid+")":""}`:(j.error||"failed");
+    }
   }catch(e){msg="action failed: "+e.message}
   busy.delete(k);
   if(btn)btn.classList.remove("busy");
@@ -892,6 +898,7 @@ function renderBots(){
       <td class="num">${esc(r.n.name)}</td>
       <td><span class="st ${r.st==="UP"?"UP":(r.st==="STP"?"STP":"other")}">${esc(r.st)}</span></td>
       <td class="ac">
+        <button class="btn btn-sm" data-act="sync" data-s="${esc(r.n.serial)}" data-b="${esc(r.name)}">Sync</button>
         ${r.st==="UP"
           ?`<button class="btn btn-sm" data-act="restart" data-s="${esc(r.n.serial)}" data-b="${esc(r.name)}">Restart</button>
              <button class="btn btn-sm btn-dan" data-act="stop" data-s="${esc(r.n.serial)}" data-b="${esc(r.name)}">Stop</button>`

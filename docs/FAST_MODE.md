@@ -46,9 +46,6 @@ new code can be deployed *before* it is switched on.
 ### Host — `panel/config.json`
 Merged over `FAST_DEFAULTS` in `panel.py`:
 
-The web panel listens on port `8080` by default. Fast Mode uses a separate
-loopback TCP-forward range beginning at `19000`; keep these ports distinct.
-
 | key | default | meaning |
 | --- | --- | --- |
 | `fast_mode` | `false` | master switch. off = pure legacy. |
@@ -81,65 +78,67 @@ and `tcp_port` on the device explicitly if you prefer fixed numbers.
 
 ---
 
-## 3. Deploy
+## 3. Deploy (already done for the host)
 
-Use your own deployment host and installation directory in place of the
-placeholders below:
+1. **Host panel + runner (done):**
+   ```
+   scp panel/panel.py   ean@host:/home/ean/t337t/eanhost/panel/panel.py
+   scp termux-bots/runner.py ean@host:/home/ean/t337t/eanhost/termux-bots/runner.py
+   scp panel/static/index.html ean@host:/home/ean/t337t/eanhost/panel/static/index.html
+   python3 -m py_compile panel/panel.py termux-bots/runner.py   # sanity
+   ```
+   The panel is supervised by `panel/start.sh` (called by `eanhost-up.sh`, which
+   cron runs every minute via `host-watchdog.sh`). Restart it with:
+   ```
+   bash /home/ean/t337t/eanhost/panel/start.sh
+   ```
+   (If it says "already running", `pkill -f 'panel.py --port 8443'` first, or
+   just let the next cron tick pick it up.)
 
-1. **Deploy the host panel and runner:**
-   ```
-   scp panel/panel.py <user>@<host>:/path/to/install/panel/panel.py
-   scp termux-bots/runner.py <user>@<host>:/path/to/install/termux-bots/runner.py
-   scp panel/static/index.html <user>@<host>:/path/to/install/panel/static/index.html
-   python3 -m py_compile panel/panel.py termux-bots/runner.py
-   ```
-   The panel is supervised by `panel/start.sh` and started by `eanhost-up.sh`.
-   Restart it from the installation directory with:
-   ```
-   bash /path/to/install/panel/start.sh
-   ```
+2. **Device runner:** copy the new `runner.py` to each tablet's
+   `termux/bots/` dir (same place as the existing runner) **without** a
+   `runner.json` yet — this alone changes nothing, the loop behaves exactly like
+   the legacy one plus the disk `bots.status` mirror.
 
-2. **Device runner:** copy the new `runner.py` to each device's existing
-   `termux/bots/` directory. Leave `runner.json` absent or set `"fast": false`
-   until you are ready to enable Fast Mode; deploying the runner alone keeps
-   the legacy behavior.
-
-3. **Enable Fast Mode per device** using the staged rollout below.
+3. **Enable per node** once you're ready (stage 2 below).
 
 ---
 
 ## 4. Staged rollout
 
-Use a unique device name and ADB serial for each node. These values are
-placeholders, not real device identifiers. The default TCP-forward port is
-`19000 + node index`; the panel itself uses port `8080`.
+Static port map (`tcp_forward_base` 19000 + node index). **No collisions** with
+the existing forwards, which stop at 18999.
 
 | index | node | serial | fast | tcp_port |
 | --- | --- | --- | --- | --- |
-| 0 | `<device-name-1>` | `<adb-serial-1>` | no | 19000 |
-| 1 | `<device-name-2>` | `<adb-serial-2>` | no | 19001 |
-| 2 | `<device-name-3>` | `<adb-serial-3>` | no | 19002 |
+| 0 | A10e | `RF8MB2B74QR` | **yes** | 19000 |
+| 1 | T337T | `d45f315a` | no | 19001 |
+| 2 | T380 | `b336faa7e413ae41` | **yes** | 19002 |
+| 3 | T380-2 | `755b468fb9ea1b30` | no | 19003 |
 
-- **Stage 0:** deploy the updated code with `fast_mode` disabled and no
-  device-side Fast Mode configuration. Existing behavior is unchanged.
-- **Stage 1:** enable one test device by setting its `runner.json` to
-  `{"fast": true, "tcp_bind": "127.0.0.1", "tcp_port": 19000, "inotify": true}`,
-  then add its ADB serial to the host's `fast_nodes`.
-- **Stage 2:** verify status, bot controls, and log streaming for that device.
-  Confirm that an unavailable TCP connection falls back to ADB.
-- **Stage 3:** repeat for additional devices, assigning each a unique TCP port.
-  Set `fast_nodes` to `[]` to include every configured node when `fast_mode` is
-  enabled.
+- **Stage 0:** new code deployed, `fast_mode:false`, no `runner.json`. Zero
+  behaviour change.
+- **Stage 1 — DONE:** A10e. Device `runner.json`
+  `{"fast": true, "tcp_bind": "127.0.0.1", "tcp_port": 19000, "inotify": true}`.
+  Host `"fast_mode": true, "fast_nodes": ["RF8MB2B74QR"]`. Verified: latency
+  `adb → tcp` (~7 ms), fallback proven (remove forward → silently adb, restore
+  → tcp).
+- **Stage 2 — DONE:** T380 (`tcp_port` 19002, live `verify` bot adopted by the
+  restarted runner, logs stream, scoped `clear_logs` over tcp).
+- **Stage 3 — all:** set `"fast_nodes": []` (all nodes) or leave `fast_mode`
+  true. Watch `latency_via` on the dashboard turn from `adb` to `tcp`.
+  (T337T and T380-2 still adb.)
 
 ### Enabling a node (repeatable recipe)
 
-1. Back up the device's existing `runner.py`, deploy the updated runner, and
-   add a `runner.json` containing that device's assigned `tcp_port`.
-2. Restart the runner using the device's existing supported procedure. If its
-   Termux agent does not automatically revive the runner, start it explicitly
-   after stopping the old process.
-3. Add the device's ADB serial to `fast_nodes` in `panel/config.json`.
-   `cfg_load()` reads the file per request, so a panel restart is not needed.
+1. Device: back up `bots/runner.py`, push the new `runner.py`, push
+   `runner.json` with the node's `tcp_port`.
+2. Restart the runner. **If the node's `agent.sh` has the revive loop** (A10e),
+   push an inbox script that only *kills* `runner.pid`; the agent revives it
+   within ~2 s. **If not** (T380), push an inbox script that kills **and**
+   re-runs `bots/start-bots.sh` in one go (see gotchas).
+3. Host: append the serial to `fast_nodes` in `panel/config.json`. `cfg_load()`
+   reads the file per request, so **no panel restart is needed**.
 4. Verify `latency_via:"tcp"` (wait one `STATUS_T`=30 s cache cycle).
 
 ---
@@ -148,23 +147,23 @@ placeholders, not real device identifiers. The default TCP-forward port is
 
 ```bash
 # token
-TOK=$(curl -s -X POST http://localhost:8080/api/login \
+TOK=$(curl -s -X POST http://localhost:8443/api/login \
   -H 'Content-Type: application/json' \
   -d '{"password":"<pw>"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"])')
 
 # Fast Mode view
-curl -s -H "X-Token: $TOK" http://localhost:8080/api/config
+curl -s -H "X-Token: $TOK" http://localhost:8443/api/config
 #   -> {"fast_mode":false,"nodes":[{"serial":"...","fast":false}, ...]}
 
 # live status: latency_via flips adb -> tcp and latency_ms drops
-curl -s -H "X-Token: $TOK" http://localhost:8080/api/status | python3 -m json.tool | head -30
+curl -s -H "X-Token: $TOK" http://localhost:8443/api/status | python3 -m json.tool | head -30
 
 # incremental log (Fast Mode only): the first call (no since) returns the tail
 #   plus offset == current file size. Pass that offset back as since= to receive
 #   only the bytes written afterwards. reset:true means the log rotated or was
 #   truncated (cleared) -> the client full-replaces.
 curl -s -H "X-Token: $TOK" \
-  "http://localhost:8080/api/node/<adb-serial>/logs?name=<log-name>&bot=<bot-name>"
+  "http://localhost:8443/api/node/<serial>/logs?name=botrun&bot=<name>"
 ```
 
 On the device:
@@ -218,11 +217,12 @@ Instant, no restart required for the host:
 - **RAM dir** must be writable by the Termux user; if `makedirs` fails the
   runner silently keeps `bots.ctl`/`bots.stopped` on flash.
 - **`bots.status` never moves to RAM** — the legacy panel depends on it.
-- **Runner recovery depends on the installed Termux agent.** Some agent
-  versions watch `bots/runner.pid` and restart the runner; others only drain
-  `inbox/*.sh`. If the installed agent does not revive the runner, start it
-  explicitly after a restart or deploy an agent version that supports runner
-  recovery. The host `eanwatch.sh` can revive the agent itself.
+- **Some nodes have no runner-revive block in `agent.sh`.** A10e's agent watches
+  `bots/runner.pid` and restarts the runner on death; T380's does **not** (it
+  only drains `inbox/*.sh`). On such a node, killing the runner leaves the bots
+  unsupervised until you re-run `bots/start-bots.sh` via an inbox script. To
+  give a node parity, replace its `agent.sh` with A10e's and bounce the agent
+  (the host `eanwatch.sh` revives it).
 - **`bots.json` must be replaced atomically.** `load_config()` returning `{}`
   (e.g. a truncated read during a non-atomic `adb push`) would make the runner
   kill every bot. The runner now keeps the last good config on a parse error;
@@ -231,3 +231,74 @@ Instant, no restart required for the host:
 - **Clearing a running bot's log is safe:** the runner opens `run-<name>.log`
   with mode `"a"` (O_APPEND), so a truncate (`clear_logs`) does not create a
   sparse file — the next write resumes at offset 0.
+
+## Stage 3 — full-fleet rollout (T337T 19001, T380-2 19003)
+
+All four nodes now run Fast Mode over persistent TCP
+(`adb forward tcp:N` host -> device LISTEN 127.0.0.1:N).
+
+| Node | Serial | Port | runner pid | agent pid | bots |
+|------|--------|------|-----------|-----------|------|
+| A10e | RF8MB2B74QR | 19000 | 7541 | 24498 | (empty) |
+| T337T | d45f315a | 19001 | 10687 | 10659 | (empty) |
+| T380 | b336faa7e413ae41 | 19002 | 18673 | 18536 | verify |
+| T380-2 | 755b468fb9ea1b30 | 19003 | 21544 | 31349 | e_xp (22999) |
+
+host `panel/config.json`: `fast_mode:true`, `fast_nodes:[all four]`.
+`/api/status` -> `latency_via:"tcp"` for all four (6-29ms).
+Validated over TCP: log streaming (tail 65536, offset=size resume, incremental), bot
+restart (T380-2 `e_xp` 22273->22999, adopted by runner 21544, no duplicate).
+
+### Gotcha: bounce the agent after agent.sh gains the runner-revive block
+A running agent keeps whatever agent.sh code it was started with. T337T's agent
+(pid 6018) had been up ~36 days; the agent.sh on disk already had the revive block,
+but the running agent predated it, so it never revived the runner after a kill
+(run.log empty, no runner.pid). Fix (same as T380): push `restart-agent.sh` to
+`inbox/`; the successor (new pid) loads the current agent.sh and revives the runner.
+Confirm by killing the runner and watching `run.log` show `started runner pid N`.
+
+### Toybox limits (T337T)
+No `head`/`wc`/`tail`/`od`; `ps -A -o PID,ARGS` unsupported. Use default `ps` + `cat`.
+
+### ps quirk
+`ps` may omit a live bot process (shows the comm name only, args truncated). Confirm
+aliveness via `cat /proc/<pid>/stat` and `/proc/<pid>/cmdline` instead.
+
+---
+
+## 9. Instantaneous CPU (panel)
+
+`STAT_CMD` samples `/proc/stat` twice, ~1 s apart, in the SAME adb roundtrip
+(`echo __CPU2__; sleep 1; cat /proc/stat`), so `node_stats` reports *instantaneous*
+busy% via `_cpu_delta(_cpu_counters(cpu), _cpu_counters(cpu2))` instead of the
+lifetime average. `_parse_cpu` (single sample) is kept as the fallback if the
+second block is missing. Cost: +1 s per node per refresh (`STATS_T`=10 s, nodes
+run in parallel threads). No `free`/`top`/`mpstat` dependency.
+
+## 10. Per-bot Git sync ("deploy from repo")
+
+Each `bots.json` entry may carry a `repo` URL:
+
+```json
+{"name": "e_xp", "dir": "e_xp", "cmd": "python3 main.py",
+ "repo": "https://github.com/me/e_xp.git"}
+```
+
+- **Panel:** `POST /api/node/<serial>/bot {"name": N, "action": "sync"}`.
+  Routed ONLY over Fast Mode TCP (`fast_call` timeout 150 s). If Fast Mode is off
+  it returns `503 {"error":"sync needs Fast Mode (TCP)"}` — git runs in the
+  Termux env, so there is no adb fallback.
+- **Runner:** `sync_bot(name)` — creates `dir` if absent; on first run
+  `git init` + `remote add origin <repo>` (needs `repo`); then `remote set-url`,
+  `fetch --prune origin`, `reset --hard FETCH_HEAD`, `rev-parse --short HEAD`.
+  Returns `{ok,name,rev,log}` or `{ok:false,error,log}`. Idempotent (re-sync is a
+  fetch/reset, no re-init).
+- **UI:** a **Sync** button per bot (card + bots table); the toast shows the short rev.
+- **Requires `git` in Termux on that node.** Install detached via the inbox lane so
+  the agent loop is not blocked:
+  `nohup sh -c 'pkg install -y git > .../outbox/gitinstall.log 2>&1' &`.
+  Installed on all four nodes (git 2.56.0).
+- **`dir` is resolved under `BASE`** (…/termux/bots) unless absolute. A git working
+  tree on `/sdcard` (FAT) works but is slow; prefer an absolute Termux-home dir for
+  repo-backed bots. NOTE: the legacy `update_all` global action already does a
+  simpler `git -C <dir> pull --ff-only` and is now meaningful once the dir is a repo.

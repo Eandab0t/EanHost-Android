@@ -470,6 +470,7 @@ def status_all():
 STAT_CMD = (
     "cat /proc/meminfo 2>/dev/null; "
     "echo __CPU__; cat /proc/stat 2>/dev/null; "
+    "echo __CPU2__; sleep 1; cat /proc/stat 2>/dev/null; "
     "echo __DISK__; df -k /data 2>/dev/null; df -k /sdcard 2>/dev/null; true"
 )
 
@@ -503,7 +504,8 @@ def _parse_mem(block):
     return used // 1024, total // 1024, int(100 * used / total)
 
 
-def _parse_cpu(block):
+def _cpu_counters(block):
+    """Return (idle_jiffies, total_jiffies) for the aggregate cpu row."""
     for line in block:
         parts = line.split()
         # /proc/stat lists cpu0, cpu1, ... first; only the aggregate "cpu" row
@@ -513,11 +515,30 @@ def _parse_cpu(block):
                 vals = [int(p) for p in parts[1:5]]
             except ValueError:
                 return None
-            total = sum(vals)
-            if total <= 0:
-                return None
-            return int(100 * (total - vals[3]) / total)
+            return vals[3], sum(vals)
     return None
+
+
+def _parse_cpu(block):
+    """Single-sample fallback: lifetime-average CPU (used if no delta)."""
+    c = _cpu_counters(block)
+    if not c:
+        return None
+    idle, total = c
+    if total <= 0:
+        return None
+    return int(100 * (total - idle) / total)
+
+
+def _cpu_delta(a, b):
+    """Instantaneous CPU% from two /proc/stat samples taken ~1s apart."""
+    if not a or not b:
+        return None
+    idle_d, total_d = b[0] - a[0], b[1] - a[1]
+    if total_d <= 0:
+        return None
+    pct = 100.0 * (1.0 - idle_d / total_d)
+    return max(0, min(100, int(round(pct))))
 
 
 def _parse_disk(block):
@@ -551,6 +572,10 @@ def _split_blocks(text):
             blocks[key] = cur
             key, cur = "cpu", []
             continue
+        if line.strip() == "__CPU2__":
+            blocks[key] = cur
+            key, cur = "cpu2", []
+            continue
         if line.strip() == "__DISK__":
             blocks[key] = cur
             key, cur = "disk", []
@@ -573,9 +598,12 @@ def node_stats(serial):
         blocks = _split_blocks(text)
         ram, ram_total, ram_pct = _parse_mem(blocks.get("mem", []))
         stats["ram"], stats["ramTotal"], stats["ramPct"] = ram, ram_total, ram_pct
-        stats["cpu"] = _parse_cpu(blocks.get("cpu", []))
         disk, disk_total, disk_pct = _parse_disk(blocks.get("disk", []))
         stats["disk"], stats["diskTotal"], stats["diskPct"] = disk, disk_total, disk_pct
+        # instantaneous CPU from two on-device samples; single-sample fallback.
+        cpu = _cpu_delta(_cpu_counters(blocks.get("cpu", [])),
+                         _cpu_counters(blocks.get("cpu2", [])))
+        stats["cpu"] = cpu if cpu is not None else _parse_cpu(blocks.get("cpu", []))
     except Exception:
         return _empty_stats(True)
     return stats
@@ -1222,8 +1250,22 @@ class Handler(BaseHTTPRequestHandler):
             name = str(body.get("name") or "").strip()
             action = str(body.get("action") or "").strip().lower()
             if not re.match(r"^[A-Za-z0-9_.-]+$", name) or \
-                    action not in ("start", "stop", "restart"):
+                    action not in ("start", "stop", "restart", "sync"):
                 return self._json(400, {"error": "bad bot action"})
+            if action == "sync":
+                # git lives in the Termux env, so this is TCP-only (no adb path).
+                res = fast_call(serial, {"cmd": "bot", "action": "sync",
+                                         "name": name}, timeout=150.0)
+                if res is None:
+                    return self._json(503, {"ok": False, "name": name,
+                                            "action": "sync",
+                                            "error": "sync needs Fast Mode (TCP)"})
+                return self._json(200 if res.get("ok") else 500,
+                                  {"ok": bool(res.get("ok")), "name": name,
+                                   "action": "sync", "via": "tcp",
+                                   "rev": res.get("rev"),
+                                   "error": res.get("error"),
+                                   "log": res.get("log")})
             before = bot_states(serial).get(name) or {}
             ok = False
             via = "adb"
@@ -1393,7 +1435,7 @@ def set_password(pw):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--port", type=int, default=8080)
+    ap.add_argument("--port", type=int, default=8443)
     ap.add_argument("--bind", default="0.0.0.0")
     ap.add_argument("--set-pass", default=None)
     args = ap.parse_args()

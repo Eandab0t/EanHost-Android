@@ -345,6 +345,58 @@ def _cmd_global(req):
     return {"ok": False, "error": "unknown action"}
 
 
+def sync_bot(name):
+    """Deploy/refresh one bot from its git remote.
+
+    First run (no .git) initialises the repo from the bot's ``repo`` URL;
+    afterwards it fetches and hard-resets to the remote HEAD. Runs on the
+    device so the panel only receives the result.
+    """
+    b = load_config().get(name)
+    if not b:
+        return {"ok": False, "error": "unknown bot"}
+    d = os.path.join(BASE, b.get("dir") or "")
+    repo = (b.get("repo") or "").strip()
+    log = []
+    if not os.path.isdir(d):
+        if not repo:
+            return {"ok": False, "error": "bot dir missing", "log": log}
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception as e:
+            return {"ok": False, "error": "cannot create dir: %s" % e, "log": log}
+
+    def run(args, timeout=180):
+        try:
+            r = subprocess.run(["git", "-C", d] + args, capture_output=True,
+                               timeout=timeout)
+        except FileNotFoundError:
+            return 127, "git not installed"
+        except Exception as e:
+            return 1, str(e)
+        out = (r.stdout + r.stderr).decode("utf-8", "replace").strip()
+        log.append("git %s -> %s" % (" ".join(args), r.returncode))
+        return r.returncode, out
+
+    if not os.path.isdir(os.path.join(d, ".git")):
+        if not repo:
+            return {"ok": False, "error": "not a repo and no 'repo' url set"}
+        rc, o = run(["init"])
+        if rc != 0:
+            return {"ok": False, "error": o, "log": log}
+        run(["remote", "add", "origin", repo])
+    if repo:
+        run(["remote", "set-url", "origin", repo])
+    rc, o = run(["fetch", "--prune", "origin"])
+    if rc != 0:
+        return {"ok": False, "error": o, "log": log}
+    rc, o = run(["reset", "--hard", "FETCH_HEAD"])
+    if rc != 0:
+        return {"ok": False, "error": o, "log": log}
+    _, rev = run(["rev-parse", "--short", "HEAD"])
+    return {"ok": True, "name": name, "rev": rev, "log": log}
+
+
 def _handle_conn(conn):
     try:
         conn.settimeout(30)
@@ -367,10 +419,13 @@ def _handle_conn(conn):
         elif cmd == "bot":
             action = str(req.get("action") or "").lower()
             name = str(req.get("name") or "")
-            if action not in ("start", "stop", "restart") or not name:
-                res = {"ok": False, "error": "bad bot"}
-            else:
+            valid = bool(name) and all(c.isalnum() or c in "._-" for c in name)
+            if action in ("start", "stop", "restart") and valid:
                 res = {"ok": enqueue_ctl(action, name)}
+            elif action == "sync" and valid:
+                res = sync_bot(name)
+            else:
+                res = {"ok": False, "error": "bad bot"}
         elif cmd == "global":
             res = _cmd_global(req)
         else:
