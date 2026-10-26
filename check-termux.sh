@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -u
-DEV=SERIAL1
+DEV=d45f315a
 
 echo "=== TERMUX STATUS (uids/gids) ==="
 adb -s $DEV shell "cat /proc/3731/status" | grep -E 'Uid:|Gid:|Groups:'

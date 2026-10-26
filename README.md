@@ -77,7 +77,7 @@ python3 panel/panel.py --set-pass '<your-password>'
 bash eanhost-up.sh
 ```
 
-Open `http://<host-ip>:8080` in a browser and sign in with the password you set.
+Open `http://<host-ip>:8443` in a browser and sign in with the password you set.
 Provisioning is safe to repeat; it updates the node's display name and
 re-establishes its on-device services.
 
@@ -185,7 +185,7 @@ EanHost-Android/
   `python3 panel/panel.py --set-pass '<your-password>'`. The panel stores its
   SHA-256 hash in `panel/config.json`; keep that file private and do not commit
   real credentials or deployment-specific node data.
-- The panel listens on `0.0.0.0:8080` by default and serves **HTTP, not HTTPS**.
+- The panel listens on `0.0.0.0:8443` by default and serves **HTTP, not HTTPS**.
   Restrict access to a trusted LAN or put it behind an appropriately secured
   reverse proxy; do not expose it directly to the public internet.
 - Treat both task inboxes as code-execution interfaces: anyone who can write

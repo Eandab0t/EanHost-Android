@@ -18,7 +18,7 @@ reads_nodes() {
       [ -n "$serial" ] && echo "$serial"
     done
   else
-    printf 'SERIAL1\nSERIAL2\n'
+    printf 'd45f315a\nRF8MB2B74QR\n'
   fi
 }
 
@@ -42,7 +42,7 @@ solo() {
 solo "$PF"
 echo "eanwatch running (pid $$): keeps supervisors+agents alive every ${CHECK_T}s"
 while true; do
-  if ! pgrep -f "panel[.]py --port 8080" >/dev/null; then
+  if ! pgrep -f "panel[.]py --port 8443" >/dev/null; then
     echo "$(date +%s): panel down -> start.sh" >>"$LOG"
     bash "$PWD/panel/start.sh" >>"$LOG" 2>&1
   fi

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# contract-test.sh - EanHost Durable Queue Contract v1 conformance harness.
-# Host: bash on any host. Drives live tablets over adb and asserts every contract clause.
+# contract-test.sh — EanHost Durable Queue Contract v1 conformance harness.
+# Host: X58 bash. Drives live tablets over adb and asserts every contract clause.
 # Usage: bash contract-test.sh            # both review-known devices
-#        bash contract-test.sh SERIAL1   # one device only
-# Reference: QUEUE-CONTRACT.md (../../docs/) §Verification.
+#        bash contract-test.sh d45f315a   # one device only
+# Reference: QUEUE-CONTRACT.md (../..) §Verification.
 # Device-toolbox-safe: only sh + ls/cat/grep -c/date/dd/cp/mv/rm/sleep on-device.
 set -u
 R=/sdcard/EanHost
@@ -11,7 +11,7 @@ LD=/tmp/eanhost-contract
 TAG="ct$(date +%s)"
 mkdir -p "$LD"
 PASS=0; FAIL=0; SKIP=0
-DEVICES="${1:-SERIAL1 SERIAL2}"
+DEVICES="${1:-d45f315a RF8MB2B74QR}"
 
 report()  { printf '%-14s %-24s %-5s %s\n' "$1" "$2" "$3" "${4:-}"; }
 done_sum() { PASS=$((PASS+1)); report "$1" "$2" PASS "$3"; }
@@ -41,7 +41,7 @@ wait_exits() { # serial, tag, count, timeout_s
 cleanup_lane() { # serial, tag
   adb -s "$1" shell "rm -f $R/results/$2-*.out $R/results/$2-*.exit $R/done/$2-*.sh $R/files/$2-*.dat" >/dev/null 2>&1
   adb -s "$1" shell "rm -f $R/termux/outbox/$2-*.out $R/termux/outbox/$2-*.exit $R/termux/done/$2-*.sh" >/dev/null 2>&1
-  adb -s "$1" shell "rm -f $R/results/$2-*.out $R/results/$2-*.exit" >/dev/null 2>&1
+  adb -s "$1" shell "rm -f $R/queue/$2-*.sh $R/results/$2-*.out $R/results/$2-*.exit" >/dev/null 2>&1
   : > "$LD/ok.txt"; : > "$LD/err.txt"; : > "$LD/wait.txt"; : > "$LD/fm.txt"
 }
 
@@ -207,7 +207,8 @@ EOF
     c_lane=0
   fi
 
-  # 10. done.
+  # 10. x58 lane removed in the 2026-09-09 optimization pass (watch.sh+queue/
+  #     deleted; ean cmd/send/fetch now call adb directly). Nothing to test.
 
   cleanup_lane "$s" "$TAG"
 done

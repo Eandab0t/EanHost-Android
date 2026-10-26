@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ean - CLI for the EanHost control plane (direct adb).
+# ean — X58 CLI for the EanHost control plane. Direct adb; no queue daemon.
 set -u
-DEV="${EAN_DEV:-SERIAL1}"
+DEV="${EAN_DEV:-d45f315a}"
 ROOT=/sdcard/EanHost
 TASKS=$ROOT/tasks
 OUT=$ROOT/results
@@ -166,12 +166,12 @@ usage() {
 ean <command> [args]   (device defaults to EAN_DEV=${DEV}; set EAN_DEV=<serial> to target another)
 
 Direct adb (no queue daemon):
-  send <local> <remote>            push a file from the host to the device
+  send <local> <remote>            push a file from X58 to the device
   fetch <remote> [local]           pull a file from the device (default: basename)
   cmd <command...>                 run one shell command on the device
-  run <scriptfile | ->             run a bash script on THIS host
+  run <scriptfile | ->             run a bash script on THIS host (X58)
 
-Device supervisor (survives host shutdown): bot/wait/psup.
+Device supervisor (survives X58 shutdown): bot/wait/psup.
   bot <script> [name]              drop a task; runs on the DEVICE, detached
   wait <task>                      poll results/<task>.out + .exit
   psup {start|stop|status}         manage the device supervisor daemon
@@ -183,7 +183,7 @@ Termux agent (Termux-UID executor):
   tstart                           idempotent launch (wake, focus, inject)
 
 Env: EAN_DEV (serial), EAN_TIMEOUT (seconds). Keepalives: eanwatch.sh (one loop,
-all nodes).
+all nodes). Older twatch/swatch per-node daemons are gone.
 EOF
 }
 

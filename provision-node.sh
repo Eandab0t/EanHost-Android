@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # provision-node.sh <serial> [name] [--wireless <ip>]
 # Onboard a new Android tablet into the EanHost control plane.
-#   <serial>   adb serial (from `adb devices`; e.g. XYZ170A or <ip>:5555)
+#   <serial>   adb serial (from `adb devices`; e.g. XYZ170A or 192.168.1.66:5555)
 #   [name]     display name (default: serial)
 #   --wireless <ip>  enable wireless adb (adb tcpip 5555 + connect ip:5555) and
 #                    register the node by its "ip:5555" serial
@@ -51,7 +51,7 @@ if ! adbd "$SERIAL"; then
 fi
 
 echo "==> 2/8 scaffolding $ROOT"
-for d in tasks results done files svc bots termux/inbox termux/outbox termux/done; do
+for d in queue tasks results done files svc bots termux/inbox termux/outbox termux/done; do
   adb -s "$SERIAL" shell mkdir -p "$ROOT/$d" >/dev/null 2>&1
 done
 
@@ -80,33 +80,33 @@ print("    nodes now: %s" % ", ".join("%s=%s" % (s, n) for s, n in nodes))
 PY
 
 echo "==> 5/8 restarting panel (picks up new node list)"
-if pgrep -f "panel.py --port 8080" >/dev/null; then
-  pkill -f "panel.py --port 8080" && sleep 1
+if pgrep -f "panel.py --port 8443" >/dev/null; then
+  pkill -f "panel.py --port 8443" && sleep 1
 fi
 bash "$PWD/panel/start.sh"
 
-echo "==> 6/8 starting host-side daemons (panel + eanwatch)"
+echo "==> 6/8 starting X58-side daemons (panel + eanwatch)"
 bash "$PWD/eanhost-up.sh" || true
 
 echo "==> 7/8 starting on-device supervisor"
-adb -s "$SERIAL" shell "sh $ROOT/svc/sstart.sh" >/dev/null 2>&1 && echo "    sstart ok" || echo "    (supervisor start deferred; eanwatch/panel will retry)"
+adb -s "$SERIAL" shell "sh $ROOT/svc/sstart.sh" >/dev/null 2>&1 && echo "    sstart ok" || echo "    (supervisor start deferred; swatch will resurrect)"
 
 echo "==> 8/8 verifying: panel up + node in frontend SERIALS"
 ok="no"
 for i in 1 2 3 4 5; do
-  if curl -sf -m 5 -o /dev/null "http://127.0.0.1:8080/"; then ok="yes"; break; fi
+  if curl -sf -m 5 -o /dev/null "http://127.0.0.1:8443/"; then ok="yes"; break; fi
   sleep 1
 done
 if [ "$ok" = yes ]; then
   echo "    panel up"
-  curl -s -m 5 "http://127.0.0.1:8080/" | grep -c "const SERIALS=\[\[" | sed 's/^/    frontend SERIALS line present: /'
-  if curl -s -m 5 "http://127.0.0.1:8080/" | grep -qF "\"$REG_SERIAL\""; then
+  curl -s -m 5 "http://127.0.0.1:8443/" | grep -c "const SERIALS=\[\[" | sed 's/^/    frontend SERIALS line present: /'
+  if curl -s -m 5 "http://127.0.0.1:8443/" | grep -qF "\"$REG_SERIAL\""; then
     echo "    node $REG_SERIAL reachable in served index"
   else
     echo "    WARN: $REG_SERIAL not in served index yet" >&2
   fi
 else
-  echo "    WARN: panel did not answer on :8080" >&2
+  echo "    WARN: panel did not answer on :8443" >&2
 fi
 
 echo "==> done: $REG_SERIAL registered. Termux agent needs 'ean tstart $REG_SERIAL' once Termux is ready."
