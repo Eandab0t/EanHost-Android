@@ -29,6 +29,14 @@ if [ -z "$SERIAL" ] || [ -n "$WIRELESS" ] && [ -z "$IP" ]; then
   echo "usage: provision-node.sh <serial> [name] [--wireless <ip>]"; exit 1
 fi
 
+# A fresh clone has only the template: config.json is ignored because the live
+# file holds the admin password hash and the real node list.
+if [ ! -f "$CFG" ]; then
+  cp "$PWD/panel/config.example.json" "$CFG"
+  chmod 600 "$CFG"
+  echo "==> created panel/config.json from config.example.json"
+fi
+
 adbd() { adb devices | awk '{print $1}' | grep -qx "$1"; }
 
 echo "==> 1/8 target: $SERIAL (${NAME})"

@@ -1,7 +1,13 @@
 # runtime state / secrets never to commit
 __pycache__/
 *.pyc
+.pytest_cache/
+
+# The live panel config holds the admin password hash and real node list.
+# A safe template lives at panel/config.example.json.
 panel/config.json
+*.bak
+*.bak.*
 bots.json
 *.log
 *.sock
@@ -12,3 +18,10 @@ bots.ctl
 bots.stopped
 run-*.pid
 run-*.log
+
+# generated screenshots and release artifacts
+dashboard-*.png
+dist/
+*.zip
+*.tar.gz
+SHA256SUMS
