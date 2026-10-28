@@ -1,0 +1,78 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>EanHost log Clear regression</title>
+<style>
+  body{font:15px/1.5 system-ui,sans-serif;margin:24px;background:#101419;color:#e4ebe8}
+  #result{white-space:pre-wrap;color:#9ad7c6}
+  iframe{position:absolute;width:1px;height:1px;left:-10px;top:-10px;border:0}
+</style>
+<h1>EanHost log Clear regression</h1>
+<pre id="result">Running…</pre>
+<iframe id="app"></iframe>
+<script>
+const result=document.querySelector("#result");
+const frame=document.querySelector("#app");
+localStorage.removeItem("tok");
+frame.onload=async()=>{
+  const w=frame.contentWindow, pending=[];
+  let stage="setup";
+  const check=(ok,message)=>{if(!ok)throw Error(message)};
+  const settle=()=>new Promise(resolve=>setTimeout(resolve,0));
+  const reply=content=>{
+    const resolve=pending.shift();
+    check(resolve,"expected a pending log request");
+    resolve({status:200,json:async()=>({content,size:null})});
+  };
+  try{
+    const originalFetch=w.fetch.bind(w);
+    w.fetch=async(input,options)=>{
+      const url=typeof input==="string"?input:input.url;
+      if(url.includes("/api/node/")&&url.includes("/logs?"))
+        return new Promise(resolve=>pending.push(resolve));
+      if(url.startsWith("/api/"))return {status:200,json:async()=>({ok:true})};
+      return originalFetch(input,options);
+    };
+    w.localStorage.removeItem("tok");
+    stage="render console page";
+    w.eval(`status={nodes:[{serial:"TEST",name:"Offline test",present:true,
+      agent_alive:true,supervisor:{pid:"1"},bots:{sample:"UP"}}]};
+      stats={};panelCfg={};sel="TEST";consoleSel="TEST";
+      consoleBot=null;consoleLog="svc";renderConsolePage()`);
+    stage="page initial request";
+    check(pending.length===1,"page should begin its first log read");
+    stage="page clear";
+    w.document.querySelector("#clearPageLog").click();
+    reply("stale page output");await settle();
+    stage="page stale response";
+    check(w.document.querySelector("#consoleLog").textContent==="",
+      "page Clear must ignore an older response");
+    stage="page subsequent poll";
+    w.loadLog("");reply("fresh page output");await settle();
+    check(w.document.querySelector("#consoleLog").textContent==="fresh page output",
+      "page polling must resume after Clear");
+
+    stage="open drawer";
+    w.openConsole("TEST");
+    check(pending.length===1,"drawer should begin its first log read");
+    stage="drawer clear";
+    w.document.querySelector("#clearDrawerLog").click();
+    reply("stale drawer output");await settle();
+    stage="drawer stale response";
+    check(w.document.querySelector("#cout").textContent==="",
+      "drawer Clear must ignore an older response");
+    stage="drawer subsequent poll";
+    w.drawConsole();reply("fresh drawer output");await settle();
+    check(w.document.querySelector("#cout").textContent==="fresh drawer output",
+      "drawer polling must resume after Clear");
+    result.textContent="PASS — page Clear rejects stale responses and accepts the next poll.\n"+
+      "PASS — drawer Clear rejects stale responses and accepts the next poll.";
+    result.style.color="#9ad7c6";
+  }catch(error){
+    result.textContent="FAIL — "+stage+": "+error.message;
+    result.style.color="#e37d75";
+  }finally{
+    localStorage.removeItem("tok");
+  }
+};
+frame.src="../panel/static/index.html";
+</script>
