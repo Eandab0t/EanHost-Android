@@ -41,6 +41,7 @@ EZ_ENVKEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 SESSIONS = {}
 LOCK = threading.Lock()
+CFG_LOCK = threading.Lock()
 
 # Fast Mode keeps opt-in so live bots on the legacy adb/file path are never
 # disturbed: with fast_mode False every helper below falls straight through to
@@ -71,6 +72,63 @@ def cfg_load():
     merged = dict(FAST_DEFAULTS)
     merged.update(cfg)
     return merged
+
+
+def cfg_update(**updates):
+    """Merge keys into config.json atomically, keeping unrelated keys intact."""
+    with CFG_LOCK:
+        cfg = {}
+        if os.path.exists(CONFIG):
+            try:
+                with open(CONFIG) as f:
+                    cfg = json.load(f) or {}
+            except Exception:
+                cfg = {}
+        cfg.update(updates)
+        try:
+            mode = os.stat(CONFIG).st_mode & 0o777
+        except OSError:
+            mode = 0o664
+        tmp = CONFIG + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(cfg, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.chmod(tmp, mode)
+        os.replace(tmp, CONFIG)
+        return cfg
+
+
+def set_node_fast(serial, enabled):
+    """Turn Fast Mode on/off for one node and return the saved config.
+
+    An empty fast_nodes list means "every node", so disabling the last node
+    also clears the master fast_mode flag instead of re-enabling everyone.
+    """
+    known = [s for s, _ in SERIALS]
+    if serial not in known:
+        return None
+    cfg = cfg_load()
+    global_on = bool(cfg.get("fast_mode"))
+    nodes = cfg.get("fast_nodes")
+    nodes = [s for s in nodes if s in known] if isinstance(nodes, list) else []
+    if not global_on:
+        current = []
+    elif nodes:
+        current = list(nodes)
+    else:
+        current = list(known)  # empty list = all nodes
+    if enabled:
+        if serial not in current:
+            current.append(serial)
+        global_on = True
+    else:
+        current = [s for s in current if s != serial]
+    if not current:
+        return cfg_update(fast_mode=False, fast_nodes=[])
+    if set(current) >= set(known):
+        return cfg_update(fast_mode=True, fast_nodes=[])
+    ordered = [s for s in known if s in current]
+    return cfg_update(fast_mode=True, fast_nodes=ordered)
 
 
 def nodes_from_cfg(cfg):
@@ -183,9 +241,11 @@ def ensure_forward(serial):
             _FWD_DONE.add(serial)
         return True
     try:
-        subprocess.run(
+        r = subprocess.run(
             ["adb", "-s", serial, "forward", f"tcp:{port}", f"tcp:{port}"],
             capture_output=True, timeout=15)
+        if r.returncode != 0:
+            return False
         with _FWD_LOCK:
             _FWD_DONE.add(serial)
         return True
@@ -229,10 +289,15 @@ def fast_call(serial, payload, timeout=TCP_READ_TIMEOUT):
     """
     if not fast_enabled(serial):
         return None
-    ensure_forward(serial)
+    if not ensure_forward(serial):
+        return None
     host, port = tcp_endpoint(serial)
     res, err = tcp_pool.call(host, port, payload, timeout=timeout)
     if err is not None or not isinstance(res, dict):
+        # The adb forward dies with a device reconnect or adb-server restart.
+        # Forget it so the next request re-establishes the tunnel.
+        with _FWD_LOCK:
+            _FWD_DONE.discard(serial)
         return None
     if res.get("ok") is False and res.get("error") == "unknown":
         return None
@@ -286,7 +351,13 @@ def dev_present(serial):
         for line in r.stdout.decode(errors="replace").splitlines())
 
 
-def read_remote(serial, path, cap=4 * 1024 * 1024):
+def read_remote(serial, path, cap=4 * 1024 * 1024, tail=False):
+    """Pull a remote file and return its bytes.
+
+    Default: the first cap+1 bytes (callers rely on this for bots.json,
+    downloads and task output). tail=True returns the LAST cap bytes instead,
+    starting on a line boundary when the file was cut, for log viewing.
+    """
     fd, tmp = tempfile.mkstemp(prefix="eanpanel-")
     os.close(fd)
     try:
@@ -294,7 +365,20 @@ def read_remote(serial, path, cap=4 * 1024 * 1024):
         if r is None or r.returncode != 0:
             return None
         with open(tmp, "rb") as f:
-            return f.read(cap + 1)
+            if not tail:
+                return f.read(cap + 1)
+            size = os.fstat(f.fileno()).st_size
+            start = max(0, size - cap)
+            # Only discard leading partial line if window starts mid-line.
+            f.seek(start)
+            data = f.read(cap)
+            if start > 0:
+                f.seek(start - 1)
+                if f.read(1) != b"\n":
+                    pos = data.find(b"\n")
+                    if pos >= 0:
+                        data = data[pos + 1:]
+            return data
     finally:
         try:
             os.unlink(tmp)
@@ -655,8 +739,12 @@ def stats_all():
     return out_map
 
 
+# Android's toybox and older busybox builds disagree on `ls -l`: some omit the
+# link-count column entirely and some omit the size. Both columns are optional
+# so a real entry (permissions, owner, group, date, name) parses either way.
 LS_RE = re.compile(
-    r"^([dl-][rwxsStT-]{9})\s+\d+\s+(\S+)\s+(\S+)\s+"
+    r"^([dl-][rwxsStT-]{9})\s+"
+    r"(?:\d+\s+)?(\S+)\s+(\S+)\s+"
     r"(?:(\d+)\s+)?(\d{4}-\d{2}-\d{2})"
     r"(?:\s+(\d{2}:\d{2}))?\s+(.+)$")
 
@@ -669,27 +757,40 @@ def parse_type(perms):
     return "file"
 
 
-def list_dir(serial, path):
-    lspath = path if path.endswith("/") else path + "/"
-    text = out(adb(serial, "ls -l " + shlex.quote(lspath), timeout=60))
+def parse_ls_text(text):
+    """Parse `ls -l` output into entries, tolerating optional columns.
+
+    Handles the two device layouts seen in the fleet: with a link count and
+    with none, CRLF line endings, and directory/symlink type detection.
+    """
     entries = []
-    for line in text.splitlines():
-        if line.startswith("total"):
+    for line in text.replace("\r", "").splitlines():
+        if not line.strip() or line.startswith("total"):
             continue
         m = LS_RE.match(line)
         if m:
             perms, _, _, size, date, t, name = m.groups()
+            name = name.strip()
             if name in (".", ".."):
                 continue
+            if perms.startswith("l") and " -> " in name:
+                name = name.split(" -> ", 1)[0]
             entries.append({"name": name, "type": parse_type(perms),
                             "size": int(size) if size else 0,
                             "mtime": (date + " " + t) if t else date})
         else:
             s = line.strip()
             if s and s not in (".", ".."):
-                entries.append({"name": s, "type": "file", "size": 0, "mtime": ""})
+                entries.append({"name": s, "type": "file", "size": 0,
+                                "mtime": ""})
     entries.sort(key=lambda e: (e["type"] != "dir", e["name"].lower()))
     return entries
+
+
+def list_dir(serial, path):
+    lspath = path if path.endswith("/") else path + "/"
+    text = out(adb(serial, "ls -l " + shlex.quote(lspath), timeout=60))
+    return parse_ls_text(text)
 
 
 def safe_path(path):
@@ -913,6 +1014,13 @@ def new_session():
     return tok
 
 
+def drop_session(token):
+    if not token:
+        return False
+    with LOCK:
+        return SESSIONS.pop(token, None) is not None
+
+
 # ---- http --------------------------------------------------------------
 
 def bot_states(serial, timeout=10):
@@ -988,7 +1096,7 @@ class Handler(BaseHTTPRequestHandler):
         headers.setdefault("Cache-Control", "no-store")
         self._send(code, body, "application/json", headers)
 
-    def _auth(self):
+    def _request_token(self):
         tok = None
         q = urllib.parse.urlparse(self.path)
         if q.query:
@@ -1001,6 +1109,10 @@ class Handler(BaseHTTPRequestHandler):
             m = re.search(r"ean_sess=([0-9a-f]+)", cookie)
             if m:
                 tok = m.group(1)
+        return tok
+
+    def _auth(self):
+        tok = self._request_token()
         return check_session(tok) if tok else False
 
     # -- GET endpoints -------------------------------------------------
@@ -1125,12 +1237,13 @@ class Handler(BaseHTTPRequestHandler):
         fn = {"svc": "/sdcard/EanHost/svc.log",
               "agent": TX + "/agent.log",
               "heart": TX + "/agent.heart",
-              "launch": TX + "/launch.log"}.get(which)
+              "launch": TX + "/launch.log",
+              "runner": TX + "/bots/run.log"}.get(which)
         if which == "botrun":
             fn = TX + "/bots/run-" + re.sub(r"[^A-Za-z0-9_.-]", "", bot or "") + ".log"
         if not fn:
             return {"log": which, "content": "unknown log"}
-        data = read_remote(serial, fn, cap=64 * 1024)
+        data = read_remote(serial, fn, cap=64 * 1024, tail=True)
         if data in (None, b""):
             return {"log": which, "content": ""}
         try:
@@ -1160,7 +1273,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth():
             return self._json(401, {"error": "unauthorized"})
         if route == "/api/logout":
-            return self._json(200, {"ok": True})
+            drop_session(self._request_token())
+            return self._json(
+                200, {"ok": True},
+                **{"Set-Cookie": "ean_sess=; Path=/; Max-Age=0; "
+                                  "Expires=Thu, 01 Jan 1970 00:00:00 GMT; "
+                                  "SameSite=Lax"})
+        if route == "/api/config":
+            return self.api_config_post()
         if route == "/api/global":
             return self.api_global(u)
         if route.startswith("/api/node/"):
@@ -1227,6 +1347,24 @@ class Handler(BaseHTTPRequestHandler):
             return json.loads(self.rfile.read(n)) if n else {}
         except Exception:
             return None
+
+    def api_config_post(self):
+        body = self.read_json() or {}
+        serial = str(body.get("serial") or "").strip()
+        if "fast" not in body:
+            return self._json(400, {"error": "missing fast"})
+        if not any(s == serial for s, _ in SERIALS):
+            return self._json(400, {"error": "unknown device"})
+        saved = set_node_fast(serial, bool(body.get("fast")))
+        if saved is None:
+            return self._json(400, {"error": "unknown device"})
+        return self._json(200, {
+            "ok": True,
+            "serial": serial,
+            "fast": fast_enabled(serial),
+            "fast_mode": bool(saved.get("fast_mode")),
+            "fast_nodes": saved.get("fast_nodes") or [],
+        })
 
     def api_login(self):
         body = self.read_json()

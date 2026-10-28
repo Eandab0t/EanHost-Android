@@ -595,6 +595,22 @@ document.addEventListener("click",e=>{
     sb.classList.remove("open");$("#menubtn").setAttribute("aria-expanded","false");
   }
 });
+document.addEventListener("click",async e=>{
+  const b=e.target&&e.target.closest?e.target.closest("[data-fast]"):null;
+  if(!b||b.disabled)return;
+  e.preventDefault();
+  const on=b.dataset.on!=="1";
+  b.disabled=true;
+  try{
+    const j=await jpost("/api/config",{serial:b.dataset.fast,fast:on});
+    await loadConfig();
+    if(view==="settings")renderSettings(); else render();
+    toast("Fast Mode "+(j.fast?"on":"off")+" · "+devName(b.dataset.fast),j.fast?"ok":"");
+  }catch(err){
+    b.disabled=false;
+    toast("Fast Mode change failed","er");
+  }
+});
 document.addEventListener("keydown",e=>{
   if(e.key==="Escape"){
     ["#deploy","#editor"].forEach(id=>{const m=$(id);if(m.classList.contains("on"))m.classList.remove("on")});
@@ -683,6 +699,14 @@ function resBar(label,valTxt,pct,cls,key){
     </div>
   </div>`;
 }
+function fastState(serial){
+  const n=(panelCfg&&panelCfg.nodes||[]).find(x=>x.serial===serial);
+  return !!(n&&n.fast);
+}
+function fastBtn(serial){
+  const on=fastState(serial);
+  return `<button class="btn btn-sm${on?" btn-ok":""}" data-fast="${esc(serial)}" data-on="${on?1:0}" aria-pressed="${on}" title="Toggle Fast Mode for ${esc(devName(serial))}">Fast ${on?"on":"off"}</button>`;
+}
 function nodeCard(n){
   const s=(stats&&stats[n.serial])||null;
   const online=!!(n&&n.present);
@@ -715,6 +739,7 @@ function nodeCard(n){
     ${resBar("Storage",dskTxt,s?s.diskPct:null,"disk","dsk")}
     <div class="bots"><div class="h">Bots</div><div data-f="bots">${bots||'<div class="nobots">No bots registered</div>'}</div></div>
     <div class="acts">
+      ${fastBtn(n.serial)}
       <button class="btn btn-sm" data-go="files">Files</button>
       <button class="btn btn-sm" data-go="console">Console</button>
       <button class="btn btn-sm" data-go="deploy">Deploy</button>
@@ -1350,7 +1375,7 @@ function renderSettings(){
   c.innerHTML=`
     <div class="head"><h2>Nodes</h2></div>
     <div class="tw"><table class="tbl">
-      <thead><tr><th>Name</th><th>Serial</th><th>State</th><th>Battery</th><th>Supervisor</th><th>Agent</th></tr></thead>
+      <thead><tr><th>Name</th><th>Serial</th><th>State</th><th>Battery</th><th>Supervisor</th><th>Agent</th><th>Fast Mode</th></tr></thead>
       <tbody>${list.map(n=>`<tr>
         <td><b>${esc(n.name)}</b></td>
         <td><code>${esc(n.serial)}</code></td>
@@ -1358,6 +1383,7 @@ function renderSettings(){
         <td>${n.battery&&n.battery.level!=null?n.battery.level+"%"+(n.battery.charging?" &#9889;":""):"--"}</td>
         <td>${n.supervisor?"pid "+esc(n.supervisor.pid):"--"}</td>
         <td>${n.agent_alive?'<span class="badge ok">alive</span>':'<span class="badge warn">stale</span>'}</td>
+        <td>${fastBtn(n.serial)}</td>
       </tr>`).join("")}</tbody></table></div>
 
     <div class="head" style="margin-top:26px"><h2>Paths</h2></div>

@@ -1,12 +1,17 @@
 # EanHost Android
 
 <p align="center">
+  <img src="docs/assets/eanhost-logo.png" width="112" height="112" alt="EanHost logo">
+</p>
+
+<p align="center">
   <strong>Give a fleet of Android tablets one reliable control plane.</strong><br>
   Provision devices, run durable jobs, manage bots, and monitor everything from a browser.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-00b4d8.svg"></a>
+  <img alt="Release: v1.0.0-beta.1" src="https://img.shields.io/badge/release-v1.0.0--beta.1-3286f5.svg">
   <img alt="Host: Linux" src="https://img.shields.io/badge/host-Linux-222633.svg">
   <img alt="Python: 3" src="https://img.shields.io/badge/Python-3-222633.svg">
   <img alt="Dependencies: Python standard library" src="https://img.shields.io/badge/panel-stdlib%20only-222633.svg">
@@ -64,14 +69,15 @@ host disconnects.
 git clone https://github.com/Eandab0t/EanHost-Android.git
 cd EanHost-Android
 
+# Set the panel administrator password first; this creates panel/config.json
+# (a git-ignored, local file).
+python3 panel/panel.py --set-pass '<your-password>'
+
 # Connect each tablet and accept its Android debugging authorization prompt.
 adb devices
 
 # Provision a device, push its worker scripts, and register it with the panel.
 ./provision-node.sh <adb-serial> <friendly-name>
-
-# Set the panel administrator password.
-python3 panel/panel.py --set-pass '<your-password>'
 
 # Start ADB, the web panel, and the fleet keep-alive loop.
 bash eanhost-up.sh
@@ -130,9 +136,10 @@ coordination files reduce writes to device storage.
 
 Fast Mode is **off by default**. It requires matching host and device settings
 and uses ADB port forwarding; if the TCP path fails, supported operations fall
-back to the existing ADB/file workflow. See the
-[Fast Mode migration and configuration guide](docs/FAST_MODE.md) before
-enabling it.
+back to the existing ADB/file workflow. Once enabled, each node has its own
+**Fast on/off** button on the dashboard and in Settings, so you can roll it out
+per device. See the [Fast Mode migration and configuration guide](docs/FAST_MODE.md)
+before enabling it.
 
 ## Durable task contract
 
@@ -164,6 +171,7 @@ EanHost-Android/
 ├── panel/
 │   ├── panel.py            # Python HTTP panel, APIs, ADB and Fast Mode
 │   ├── start.sh            # Idempotent panel launcher
+│   ├── config.example.json # Safe template; the live config.json is ignored
 │   └── static/index.html   # Responsive dashboard and interface
 ├── device-payload/
 │   ├── svc/                # On-device task supervisor
@@ -172,8 +180,9 @@ EanHost-Android/
 │   ├── runner.py           # Bot supervisor and optional TCP server
 │   ├── runner.json         # Optional device-side Fast Mode settings
 │   └── start-bots.sh       # Runner launcher
-├── tests/contract/         # Queue-contract conformance harness
+├── tests/                  # Unit tests and the queue-contract harness
 └── docs/
+    ├── assets/             # Project logo
     ├── NOTES.md            # Protocol details, runbook, and troubleshooting
     ├── QUEUE-CONTRACT.md   # Durable queue specification
     └── FAST_MODE.md        # Fast Mode setup, rollout, and rollback
